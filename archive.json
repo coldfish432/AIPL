@@ -1,0 +1,436 @@
+{
+  "tasks": [
+    {
+      "id": "plan-20251218-103751-1",
+      "title": "Review current pipeline and logging gaps",
+      "type": "time_for_certainty",
+      "priority": 1,
+      "estimated_minutes": 20,
+      "status": "doing",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "outputs/logging_review.txt exists and lists current logging behavior and identified gaps"
+      ],
+      "plan_id": "plan-20251218-103751",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766072283.697873
+    },
+    {
+      "id": "plan-20251218-103751-2",
+      "title": "Implement logging module for the pipeline",
+      "type": "time_for_certainty",
+      "priority": 2,
+      "estimated_minutes": 60,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-103751-1"
+      ],
+      "acceptance_criteria": [
+        "outputs/logging_module_changes.txt exists and describes added/updated files for the logging module"
+      ],
+      "plan_id": "plan-20251218-103751",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766072283.6978793
+    },
+    {
+      "id": "plan-20251218-103751-3",
+      "title": "Write usage documentation for the logging module",
+      "type": "time_for_certainty",
+      "priority": 3,
+      "estimated_minutes": 30,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-103751-2"
+      ],
+      "acceptance_criteria": [
+        "outputs/logging_usage_doc.md exists with setup steps and an example showing how to use the logging module"
+      ],
+      "plan_id": "plan-20251218-103751",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766072283.697882
+    },
+    {
+      "id": "plan-20251218-110308-1",
+      "title": "需求梳理与成功指标定义",
+      "type": "time_for_certainty",
+      "priority": 1,
+      "estimated_minutes": 30,
+      "status": "failed",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "文件 outputs/requirements.md 存在",
+        "内容包含夜间运行目标、数据来源、审计/合规要求、成功判定指标（至少3条）"
+      ],
+      "plan_id": "plan-20251218-110308",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766073804.3508122,
+      "last_run": "run-20251218-110324",
+      "last_reasons": [
+        "Unknown task_id: plan-20251218-110308-1"
+      ],
+      "last_plan": "plan-20251218-110308"
+    },
+    {
+      "id": "plan-20251218-110308-2",
+      "title": "总体架构与数据流设计",
+      "type": "time_for_certainty",
+      "priority": 2,
+      "estimated_minutes": 45,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-110308-1"
+      ],
+      "acceptance_criteria": [
+        "文件 outputs/architecture.md 存在",
+        "包含主要组件列表、数据流顺序（含输入/输出）、审计日志写入点描述"
+      ],
+      "plan_id": "plan-20251218-110308",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766073804.350817
+    },
+    {
+      "id": "plan-20251218-110308-3",
+      "title": "调度与编排方案",
+      "type": "time_for_certainty",
+      "priority": 3,
+      "estimated_minutes": 35,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-110308-2"
+      ],
+      "acceptance_criteria": [
+        "文件 outputs/schedule.md 存在",
+        "记录夜间触发时间、任务顺序/并行性、重试/超时策略、失败处理流程"
+      ],
+      "plan_id": "plan-20251218-110308",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766073804.350819
+    },
+    {
+      "id": "plan-20251218-110308-4",
+      "title": "日志、监控与告警规范",
+      "type": "time_for_certainty",
+      "priority": 4,
+      "estimated_minutes": 35,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-110308-2"
+      ],
+      "acceptance_criteria": [
+        "文件 outputs/observability.md 存在",
+        "包含日志字段规范、存储/留存策略、核心监控指标、告警规则（至少2条）"
+      ],
+      "plan_id": "plan-20251218-110308",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766073804.3508203
+    },
+    {
+      "id": "plan-20251218-110308-5",
+      "title": "晨检验证清单",
+      "type": "time_for_certainty",
+      "priority": 5,
+      "estimated_minutes": 25,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-110308-3",
+        "plan-20251218-110308-4"
+      ],
+      "acceptance_criteria": [
+        "文件 outputs/morning-checklist.md 存在",
+        "列出晨间核验步骤（任务状态、指标、数据抽样、审计记录）不少于6项"
+      ],
+      "plan_id": "plan-20251218-110308",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766073804.350821
+    },
+    {
+      "id": "plan-20251218-110308-6",
+      "title": "风险与缓解措施",
+      "type": "time_for_certainty",
+      "priority": 6,
+      "estimated_minutes": 20,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-110308-1",
+        "plan-20251218-110308-2"
+      ],
+      "acceptance_criteria": [
+        "文件 outputs/risks.md 存在",
+        "列出至少5个主要风险及对应缓解/应急措施"
+      ],
+      "plan_id": "plan-20251218-110308",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766073804.3508224
+    },
+    {
+      "id": "plan-20251218-111041-1",
+      "title": "梳理需求与成功标准",
+      "type": "time_for_certainty",
+      "priority": 1,
+      "estimated_minutes": 40,
+      "status": "failed",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "outputs/requirements.md 存在",
+        "requirements.md 含有段落标题\"成功标准\""
+      ],
+      "plan_id": "plan-20251218-111041",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766074252.8551981,
+      "last_run": "run-20251218-111052",
+      "last_reasons": [
+        "Unknown task_id: plan-20251218-111041-1"
+      ],
+      "last_plan": "plan-20251218-111041"
+    },
+    {
+      "id": "plan-20251218-111041-2",
+      "title": "定义总体架构与数据流",
+      "type": "time_for_certainty",
+      "priority": 2,
+      "estimated_minutes": 60,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-111041-1"
+      ],
+      "acceptance_criteria": [
+        "outputs/pipeline-design.md 存在",
+        "pipeline-design.md 含有\"数据流\"章节"
+      ],
+      "plan_id": "plan-20251218-111041",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766074252.8552036
+    },
+    {
+      "id": "plan-20251218-111041-3",
+      "title": "设定夜间任务调度方案",
+      "type": "time_for_certainty",
+      "priority": 3,
+      "estimated_minutes": 45,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-111041-2"
+      ],
+      "acceptance_criteria": [
+        "outputs/schedule-config.json 存在",
+        "schedule-config.json 含有键\"cron\""
+      ],
+      "plan_id": "plan-20251218-111041",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766074252.8552058
+    },
+    {
+      "id": "plan-20251218-111041-4",
+      "title": "设计结果验证与告警流程",
+      "type": "time_for_certainty",
+      "priority": 4,
+      "estimated_minutes": 50,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-111041-3"
+      ],
+      "acceptance_criteria": [
+        "outputs/verification-checklist.md 存在",
+        "verification-checklist.md 含有\"告警\"字样"
+      ],
+      "plan_id": "plan-20251218-111041",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766074252.8552077
+    },
+    {
+      "id": "plan-20251218-111041-5",
+      "title": "制定审计与可追溯性规范",
+      "type": "time_for_certainty",
+      "priority": 5,
+      "estimated_minutes": 45,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-111041-4"
+      ],
+      "acceptance_criteria": [
+        "outputs/audit-log-spec.md 存在",
+        "audit-log-spec.md 含有\"追溯\"字样"
+      ],
+      "plan_id": "plan-20251218-111041",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766074252.8552089
+    },
+    {
+      "id": "plan-20251218-123128-1",
+      "title": "整理需求与目标（中文简述）",
+      "type": "time_for_certainty",
+      "priority": 1,
+      "estimated_minutes": 40,
+      "status": "failed",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "outputs/requirements.md 存在且包含运行时长、审计要求、验证口径、数据源/模型范围等要点"
+      ],
+      "plan_id": "plan-20251218-123128",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766079098.4430432,
+      "last_run": "run-20251218-123138",
+      "last_reasons": [
+        "Unknown task_id: plan-20251218-123128-1"
+      ],
+      "last_plan": "plan-20251218-123128"
+    },
+    {
+      "id": "plan-20251218-123128-2",
+      "title": "设计总体架构与数据流",
+      "type": "time_for_certainty",
+      "priority": 2,
+      "estimated_minutes": 60,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-123128-1"
+      ],
+      "acceptance_criteria": [
+        "outputs/architecture.md 存在且说明组件、数据/日志流、调度方式、失败重试、权限隔离等"
+      ],
+      "plan_id": "plan-20251218-123128",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766079098.4430637
+    },
+    {
+      "id": "plan-20251218-123128-3",
+      "title": "搭建可运行的管线骨架",
+      "type": "time_for_certainty",
+      "priority": 3,
+      "estimated_minutes": 90,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-123128-2"
+      ],
+      "acceptance_criteria": [
+        "outputs/pipeline/ 目录存在并含基础脚本（如 run.sh 或 run.ps1）",
+        "脚本包含日志落盘与基本参数输入示例"
+      ],
+      "plan_id": "plan-20251218-123128",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766079098.443066
+    },
+    {
+      "id": "plan-20251218-123128-4",
+      "title": "审计与日志方案",
+      "type": "time_for_certainty",
+      "priority": 4,
+      "estimated_minutes": 50,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-123128-3"
+      ],
+      "acceptance_criteria": [
+        "outputs/auditing.md 存在且描述日志字段、签名/哈希校验、存储位置、保留策略、异常告警流程"
+      ],
+      "plan_id": "plan-20251218-123128",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766079098.4430668
+    },
+    {
+      "id": "plan-20251218-123128-5",
+      "title": "早晨验证清单与回顾流程",
+      "type": "time_for_certainty",
+      "priority": 5,
+      "estimated_minutes": 30,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-123128-4"
+      ],
+      "acceptance_criteria": [
+        "outputs/verification-checklist.md 存在且列出每日检查步骤、预期产物位置、自动化验证脚本调用示例"
+      ],
+      "plan_id": "plan-20251218-123128",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766079098.4430704
+    },
+    {
+      "id": "plan-20251218-130557-1",
+      "title": "梳理需求与现状记录",
+      "type": "time_for_certainty",
+      "priority": 1,
+      "estimated_minutes": 30,
+      "status": "failed",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "outputs/requirements.md 存在且列出目标、约束、数据源、夜间运行/早晨验证需求"
+      ],
+      "plan_id": "plan-20251218-130557",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766081169.1331182,
+      "last_run": "run-20251218-130609",
+      "last_reasons": [
+        "Unknown task_id: plan-20251218-130557-1"
+      ],
+      "last_plan": "plan-20251218-130557"
+    },
+    {
+      "id": "plan-20251218-130557-2",
+      "title": "设计可审计流水线架构",
+      "type": "time_for_certainty",
+      "priority": 2,
+      "estimated_minutes": 45,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-130557-1"
+      ],
+      "acceptance_criteria": [
+        "outputs/pipeline_design.md 存在且包含数据流/任务编排/日志审计点/失败恢复机制/验证环节"
+      ],
+      "plan_id": "plan-20251218-130557",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766081169.1331222
+    },
+    {
+      "id": "plan-20251218-130557-3",
+      "title": "制定夜间运行与早晨验证方案",
+      "type": "time_for_certainty",
+      "priority": 3,
+      "estimated_minutes": 40,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-130557-2"
+      ],
+      "acceptance_criteria": [
+        "outputs/run_verify_plan.md 存在且包含调度策略、运行窗口、校验步骤、人工复核清单"
+      ],
+      "plan_id": "plan-20251218-130557",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766081169.133124
+    },
+    {
+      "id": "plan-20251218-130557-4",
+      "title": "列出实施待办与责任分配",
+      "type": "time_for_certainty",
+      "priority": 4,
+      "estimated_minutes": 30,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-130557-3"
+      ],
+      "acceptance_criteria": [
+        "outputs/action_items.md 存在且包含分阶段任务、负责人、预估工期、里程碑"
+      ],
+      "plan_id": "plan-20251218-130557",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766081169.1331253
+    },
+    {
+      "id": "plan-20251218-130557-5",
+      "title": "风险与监控预案",
+      "type": "time_for_certainty",
+      "priority": 5,
+      "estimated_minutes": 25,
+      "status": "todo",
+      "dependencies": [
+        "plan-20251218-130557-3"
+      ],
+      "acceptance_criteria": [
+        "outputs/risk_monitor.md 存在且列出主要风险、监控指标、告警阈值、应急处置步骤"
+      ],
+      "plan_id": "plan-20251218-130557",
+      "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+      "created_ts": 1766081169.1331265
+    }
+  ]
+}

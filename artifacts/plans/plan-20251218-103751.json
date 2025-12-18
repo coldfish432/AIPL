@@ -1,0 +1,49 @@
+{
+  "plan_id": "plan-20251218-103751",
+  "input_task": "示例：添加日志模块并写使用文档",
+  "goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
+  "prompt": "\nYou are a planning agent. Break down the user's task into a small number of ordered subtasks (topologically sorted).\nEach subtask must be objective, verifiable, and small enough to complete in one run.\nReturn ONLY JSON matching the schema (no markdown, no comments).\n\nConstraints:\n- plan_id: plan-20251218-103751\n- At most 8 subtasks.\n- Use type \"time_for_certainty\" for every task.\n- Give unique ids (prefix with \"plan-20251218-103751-\" is fine).\n- Dependencies must reference earlier tasks only.\n- Provide concrete acceptance_criteria that can be checked by simple file existence/contents under outputs/ or repo root.\n\nInput task:\n示例：添加日志模块并写使用文档\nGoal context:\nBuild an auditable AI pipeline that can run tasks overnight and verify results in the morning.\n\nSchema you must follow:\n{\n  \"plan_id\": \"string\",\n  \"tasks\": [\n    {\n      \"id\": \"string\",\n      \"title\": \"string\",\n      \"type\": \"time_for_certainty\",\n      \"priority\": 0,\n      \"estimated_minutes\": 0,\n      \"dependencies\": [\"string\"],\n      \"acceptance_criteria\": [\"string\"]\n    }\n  ]\n}\n",
+  "raw_plan": {
+    "plan_id": "plan-20251218-103751",
+    "tasks": [
+      {
+        "id": "plan-20251218-103751-1",
+        "title": "Review current pipeline and logging gaps",
+        "type": "time_for_certainty",
+        "priority": 1,
+        "estimated_minutes": 20,
+        "dependencies": [],
+        "acceptance_criteria": [
+          "outputs/logging_review.txt exists and lists current logging behavior and identified gaps"
+        ]
+      },
+      {
+        "id": "plan-20251218-103751-2",
+        "title": "Implement logging module for the pipeline",
+        "type": "time_for_certainty",
+        "priority": 2,
+        "estimated_minutes": 60,
+        "dependencies": [
+          "plan-20251218-103751-1"
+        ],
+        "acceptance_criteria": [
+          "outputs/logging_module_changes.txt exists and describes added/updated files for the logging module"
+        ]
+      },
+      {
+        "id": "plan-20251218-103751-3",
+        "title": "Write usage documentation for the logging module",
+        "type": "time_for_certainty",
+        "priority": 3,
+        "estimated_minutes": 30,
+        "dependencies": [
+          "plan-20251218-103751-2"
+        ],
+        "acceptance_criteria": [
+          "outputs/logging_usage_doc.md exists with setup steps and an example showing how to use the logging module"
+        ]
+      }
+    ]
+  },
+  "created_ts": 1766072283.6967072
+}

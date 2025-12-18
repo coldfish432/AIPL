@@ -1,0 +1,6 @@
+{
+  "why_failed": [
+    "Unknown task_id: plan-20251218-110308-1"
+  ],
+  "next_round_should_do": "Fix outputs so acceptance_criteria pass."
+}

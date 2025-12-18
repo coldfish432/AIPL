@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "produced": [
+    "outputs\\summary.md"
+  ],
+  "stdout_summary": "Wrote local summary"
+}

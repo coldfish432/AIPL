@@ -1,0 +1,6 @@
+{
+  "why_failed": [
+    "summary.md missing required fields: Task/Run"
+  ],
+  "next_round_should_do": "Fix outputs so acceptance_criteria pass."
+}

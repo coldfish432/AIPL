@@ -1,0 +1,10 @@
+{"type": "run_init", "run_id": "run-20251218-111052", "task_id": "plan-20251218-111041-1", "plan_id": "plan-20251218-111041", "ts": 1766074252.9535272}
+{"type": "step_round_start", "task_id": "plan-20251218-111041-1", "plan_id": "plan-20251218-111041", "step": "step-01", "round": 0, "mode": "bad", "ts": 1766074252.9541194}
+{"type": "subagent_start", "task_id": "plan-20251218-111041-1", "step": "step-01", "round": 0, "mode": "bad", "ts": 1766074253.0177531}
+{"type": "subagent_done", "task_id": "plan-20251218-111041-1", "step": "step-01", "round": 0, "mode": "bad", "ts": 1766074253.0203247}
+{"type": "step_round_verified", "task_id": "plan-20251218-111041-1", "plan_id": "plan-20251218-111041", "step": "step-01", "round": 0, "passed": false, "ts": 1766074253.0270329}
+{"type": "step_round_start", "task_id": "plan-20251218-111041-1", "plan_id": "plan-20251218-111041", "step": "step-01", "round": 1, "mode": "good", "ts": 1766074253.0279675}
+{"type": "subagent_start", "task_id": "plan-20251218-111041-1", "step": "step-01", "round": 1, "mode": "good", "ts": 1766074253.0899422}
+{"type": "subagent_done", "task_id": "plan-20251218-111041-1", "step": "step-01", "round": 1, "mode": "good", "ts": 1766074256.3028908}
+{"type": "step_round_verified", "task_id": "plan-20251218-111041-1", "plan_id": "plan-20251218-111041", "step": "step-01", "round": 1, "passed": false, "ts": 1766074256.3087988}
+{"type": "run_done", "run_id": "run-20251218-111052", "task_id": "plan-20251218-111041-1", "plan_id": "plan-20251218-111041", "passed": false, "ts": 1766074256.310005}

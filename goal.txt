@@ -1,0 +1,1 @@
+Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.

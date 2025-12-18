@@ -109,8 +109,10 @@ def main():
     passed = False
     final_reasons = []
 
-    # round-0 故意输出错误，round-1 正常输出（验证复盘流程）
-    for round_id, mode in [(0, "bad"), (1, "good")]:
+    # 最多尝试 max_rounds 次，真实失败才进入返工
+    max_rounds = 3
+    for round_id in range(max_rounds):
+        mode = "good"
         append_jsonl(
             run_dir / "events.jsonl",
             {"type": "step_round_start", "task_id": task_id, "plan_id": plan_id, "step": step_id, "round": round_id, "mode": mode, "ts": time.time()}
@@ -137,12 +139,12 @@ def main():
 
         if passed:
             break
-
-        # 创建复盘请求
-        write_json(
-            run_dir / "steps" / step_id / f"round-{round_id}" / "rework_request.json",
-            {"why_failed": reasons, "next_round_should_do": "Fix outputs so acceptance_criteria pass."},
-        )
+        # 若未通过且仍有剩余轮次，创建复盘请求
+        if round_id < max_rounds - 1:
+            write_json(
+                run_dir / "steps" / step_id / f"round-{round_id}" / "rework_request.json",
+                {"why_failed": reasons, "next_round_should_do": "Fix outputs so acceptance_criteria pass."},
+            )
 
     # 输出可读性更好的索引文件
     index_lines = [

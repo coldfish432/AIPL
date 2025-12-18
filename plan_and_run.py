@@ -87,6 +87,7 @@ def main():
     parser.add_argument("--plan-id", help="指定 plan_id，缺省自动生成")
     parser.add_argument("--max-tasks", type=int, default=8, help="拆解的最大子任务数（用于提示词约束）")
     parser.add_argument("--no-run", action="store_true", help="只生成计划与 backlog，不立即执行")
+    parser.add_argument("--cleanup", action="store_true", help="计划完成/停止后自动清理该 plan 的 backlog 任务，并写回 plan 文件记录状态")
     args = parser.parse_args()
 
     plan_id = args.plan_id or time.strftime("plan-%Y%m%d-%H%M%S")
@@ -185,6 +186,8 @@ Schema you must follow:
 
     if args.no_run:
         print("[PLAN] no-run flag set, skipping execution")
+        if args.cleanup:
+            print("[CLEANUP] skip cleanup when --no-run is set (nothing executed yet)")
         return
 
     # 循环调用 controller 逐个执行计划内任务
@@ -198,6 +201,27 @@ Schema you must follow:
             break
         print(f"[RUN] invoking controller for plan_id={plan_id}")
         subprocess.check_call(["python", "controller.py", "--plan-id", plan_id], cwd=root)
+
+    if args.cleanup:
+        backlog = read_json(backlog_path)
+        keep, removed = [], []
+        for t in backlog.get("tasks", []):
+            if t.get("plan_id") == plan_id:
+                removed.append(t)
+            else:
+                keep.append(t)
+        backlog["tasks"] = keep
+        write_json(backlog_path, backlog)
+
+        # 将清理出的任务状态写回 plan 文件，取代单独的 archive
+        plan_file = root / "artifacts" / "plans" / f"{plan_id}.json"
+        if plan_file.exists():
+            plan_data = read_json(plan_file)
+            plan_data["last_cleanup_ts"] = time.time()
+            plan_data["cleanup_snapshot"] = removed
+            write_json(plan_file, plan_data)
+
+        print(f"[CLEANUP] removed {len(removed)} tasks for plan_id={plan_id} (recorded in plan file)")
 
 
 if __name__ == "__main__":

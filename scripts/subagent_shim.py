@@ -90,6 +90,47 @@ def apply_writes(run_dir: Path, writes: list[dict]) -> list[str]:
     return produced
 
 
+def run_commands(run_dir: Path, commands: list[str], timeout: int = 120) -> tuple[list[dict], bool]:
+    """
+    执行允许的命令，收集输出。返回 (logs, all_passed)
+    仅允许前缀为 python 的命令（如 python -m pytest / python scripts/check.py / python -m pip check）。
+    """
+    logs = []
+    all_passed = True
+    for cmd in commands:
+        cmd_str = cmd.strip()
+        if not cmd_str:
+            continue
+        if not cmd_str.startswith("python"):
+            logs.append({"cmd": cmd_str, "status": "skipped", "reason": "not in allowed prefix"})
+            all_passed = False
+            continue
+        try:
+            result = subprocess.run(
+                cmd_str,
+                cwd=run_dir,
+                shell=True,
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            log = {
+                "cmd": cmd_str,
+                "returncode": result.returncode,
+                "stdout": (result.stdout or "")[:2000],
+                "stderr": (result.stderr or "")[:2000],
+            }
+            logs.append(log)
+            if result.returncode != 0:
+                all_passed = False
+        except subprocess.TimeoutExpired as e:
+            logs.append({"cmd": cmd_str, "status": "timeout", "detail": str(e)})
+            all_passed = False
+    return logs, all_passed
+
+
 def main():
     # CLI 参数：run_dir task_id step_id round_id mode
     run_dir = Path(sys.argv[1])
@@ -109,12 +150,17 @@ def main():
 
     rework = load_rework(run_dir, step_id, round_id)
     why_failed = ""
-    if rework and "why_failed" in rework:
-        prev = rework["why_failed"]
+    prev_stdout = ""
+    if rework:
+        prev = rework.get("why_failed", "")
         if isinstance(prev, list):
-            why_failed = "\n".join(json.dumps(item, ensure_ascii=False) if isinstance(item, dict) else str(item) for item in prev)
+            try:
+                why_failed = json.dumps(prev, ensure_ascii=False)
+            except Exception:
+                why_failed = str(prev)
         else:
             why_failed = str(prev)
+        prev_stdout = rework.get("prev_stdout", "")
 
     req = {
         "task_id": task_id,
@@ -127,46 +173,42 @@ def main():
     append_jsonl(run_dir / "events.jsonl", {"type": "subagent_start", **req})
 
     snap = snapshot_outputs(outputs_dir)
-    prompt = textwrap.dedent(f"""
-    You are an automated fixing agent. Your job is to make the verifier pass.
-
-    Context:
-    - Task ID: {task_id}
-    - Run: {run_dir.name}
-
-    Acceptance criteria:
-    {chr(10).join("- " + c for c in acceptance)}
-
-    Verifier feedback (why_failed):
-    {why_failed}
-
-    Current outputs snapshot (path -> content, truncated):
-    {json.dumps(snap, ensure_ascii=False)}
-
-    Produce a JSON object with this exact schema:
-    {{
-      "writes": [
-        {{"path": "<relative-to-run_dir>", "content": "<full file content>"}}
-      ]
-    }}
-
-    Rules:
-    - Return ONLY valid JSON. No markdown. No code fences. No commentary.
-    - You may write to outputs/ or run directory root; stay within run_dir.
-    - If a file must exist, include it in writes.
-    - 文件内如需注释/提示语，优先使用简洁中文。
-    """).strip()
+    acceptance_block = "\n".join("- " + c for c in acceptance) if acceptance else "- (none provided)"
+    tmpl = (root / "prompts" / "subagent_fix.txt").read_text(encoding="utf-8")
+    prompt = tmpl.format(
+        task_id=task_id,
+        run_name=run_dir.name,
+        acceptance_block=acceptance_block,
+        why_failed=why_failed,
+        prev_stdout=prev_stdout,
+        snap_json=json.dumps(snap, ensure_ascii=False),
+    )
 
     raw = run_codex(prompt, root).strip()
     plan = json.loads(raw)
     writes = plan.get("writes", [])
     produced_paths = apply_writes(run_dir, writes)
-    stdout = "Codex applied writes: " + ", ".join(produced_paths or ["<none>"])
+
+    cmd_logs = []
+    cmds = plan.get("commands", [])
+    if isinstance(cmds, list) and cmds:
+        cmd_logs, cmds_ok = run_commands(run_dir, cmds)
+    else:
+        cmds_ok = True
+
+    stdout_lines = []
+    stdout_lines.append("Codex applied writes: " + ", ".join(produced_paths or ["<none>"]))
+    if cmd_logs:
+        for log in cmd_logs:
+            status = "ok" if log.get("returncode", 0) == 0 else log.get("status", "failed")
+            stdout_lines.append(f"[cmd] {log.get('cmd')} status={status} rc={log.get('returncode', '')}")
+    stdout = "\n".join(stdout_lines)
 
     write_json(round_dir / "shape_response.json", {
         "ok": True,
         "produced": [str(p.relative_to(run_dir)) for p in outputs_dir.glob("*")],
         "stdout_summary": stdout,
+        "commands": cmd_logs,
     })
     (round_dir / "stdout.txt").write_text(stdout + "\n", encoding="utf-8")
     (round_dir / "stderr.txt").write_text("", encoding="utf-8")

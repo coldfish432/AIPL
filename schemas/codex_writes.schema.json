@@ -13,8 +13,12 @@
         "required": ["path", "content"],
         "additionalProperties": false
       }
+    },
+    "commands": {
+      "type": "array",
+      "items": { "type": "string" }
     }
   },
-  "required": ["writes"],
+  "required": ["writes", "commands"],
   "additionalProperties": false
 }

@@ -113,6 +113,7 @@ def main():
     max_rounds = 3
     for round_id in range(max_rounds):
         mode = "good"
+        round_dir = run_dir / "steps" / step_id / f"round-{round_id}"
         append_jsonl(
             run_dir / "events.jsonl",
             {"type": "step_round_start", "task_id": task_id, "plan_id": plan_id, "step": step_id, "round": round_id, "mode": mode, "ts": time.time()}
@@ -128,7 +129,7 @@ def main():
 
         # 记录本轮验证结果
         write_json(
-            run_dir / "steps" / step_id / f"round-{round_id}" / "verification.json",
+            round_dir / "verification.json",
             {"passed": passed, "reasons": reasons},
         )
 
@@ -141,9 +142,20 @@ def main():
             break
         # 若未通过且仍有剩余轮次，创建复盘请求
         if round_id < max_rounds - 1:
+            stdout_txt = ""
+            stdout_path = round_dir / "stdout.txt"
+            if stdout_path.exists():
+                try:
+                    stdout_txt = stdout_path.read_text(encoding="utf-8", errors="replace")[:1000]
+                except Exception:
+                    stdout_txt = ""
             write_json(
-                run_dir / "steps" / step_id / f"round-{round_id}" / "rework_request.json",
-                {"why_failed": reasons, "next_round_should_do": "Fix outputs so acceptance_criteria pass."},
+                round_dir / "rework_request.json",
+                {
+                    "why_failed": reasons,
+                    "prev_stdout": stdout_txt,
+                    "next_round_should_do": "Fix outputs so acceptance_criteria pass."
+                },
             )
 
     # 输出可读性更好的索引文件

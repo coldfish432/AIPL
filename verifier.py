@@ -1,6 +1,45 @@
 from pathlib import Path
 import json
 import subprocess
+import textwrap
+
+
+def run_codex_verify(prompt: str, root_dir: Path) -> dict:
+    cmd = [
+        "codex", "exec",
+        "--full-auto",
+        "--sandbox", "workspace-write",
+        "-C", str(root_dir),
+        "--skip-git-repo-check",
+        "--color", "never",
+    ]
+    result = subprocess.run(
+        cmd,
+        input=prompt,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "codex failed").strip())
+    return json.loads(result.stdout.strip())
+
+
+def snapshot_outputs(outputs_dir: Path, max_chars_per_file: int = 2000) -> dict:
+    snap = {}
+    if not outputs_dir.exists():
+        return snap
+    for p in outputs_dir.glob("**/*"):
+        if p.is_file():
+            rel = p.relative_to(outputs_dir.parent)
+            try:
+                txt = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                txt = ""
+            snap[str(rel)] = txt[:max_chars_per_file]
+    return snap
 
 
 def _reason(mtype: str, file: str | None = None, expected: str | None = None, actual: str | None = None, hint: str | None = None):
@@ -123,27 +162,40 @@ def _legacy_tasks(run_dir: Path, task_id: str):
 
 def verify_task(run_dir: Path, task_id: str):
     """
-    返回 (passed, reasons) 结构化结果。
-    优先读取 backlog 中的 checks（若 task_spec 提供），否则走 legacy 兼容或报 unknown_task。
+    使用 Codex 验收：提供 acceptance_criteria 和 outputs 快照，由 Codex 返回 {passed, reasons[]}。
+    reasons 建议包含 type/file/expected/actual/hint。
     """
-    # 尝试从 backlog 读取 checks
-    checks = []
-    task_spec_path = run_dir.parent.parent / "backlog.json"
-    if task_spec_path.exists():
+    root = Path(__file__).resolve().parent
+    backlog_path = root / "backlog.json"
+    acceptance = []
+    if backlog_path.exists():
         try:
-            spec = json.loads(task_spec_path.read_text(encoding="utf-8"))
+            spec = json.loads(backlog_path.read_text(encoding="utf-8"))
             for t in spec.get("tasks", []):
                 if t.get("id") == task_id:
-                    checks = t.get("checks", [])
+                    acceptance = t.get("acceptance_criteria", [])
                     break
         except Exception:
-            checks = []
+            acceptance = []
 
-    if checks:
-        return _run_checks(run_dir, checks)
+    outputs_dir = run_dir / "outputs"
+    snap = snapshot_outputs(outputs_dir)
 
-    legacy = _legacy_tasks(run_dir, task_id)
-    if legacy is not None:
-        return legacy
+    acceptance_block = "\n".join("- " + c for c in acceptance) if acceptance else "- (none provided)"
+    tmpl = (root / "prompts" / "verifier.txt").read_text(encoding="utf-8")
+    prompt = tmpl.format(
+        task_id=task_id,
+        acceptance_block=acceptance_block,
+        snap_json=json.dumps(snap, ensure_ascii=False),
+    )
 
-    return False, [_reason("unknown_task", hint=f"task_id={task_id} not supported and no checks provided")]
+    try:
+        result = run_codex_verify(prompt, root)
+    except Exception as e:
+        return False, [{"type": "verifier_error", "hint": str(e)}]
+
+    passed = bool(result.get("passed"))
+    reasons = result.get("reasons", [])
+    if not isinstance(reasons, list):
+        reasons = [{"type": "invalid_output", "hint": str(reasons)}]
+    return passed, reasons

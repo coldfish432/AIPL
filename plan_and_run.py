@@ -97,41 +97,13 @@ def main():
     backlog = read_json(backlog_path)
 
     # 构造提示词：要求输出拓扑序的细粒度子任务
-    prompt = f"""
-You are a planning agent. Break down the user's task into a small number of ordered subtasks (topologically sorted).
-Each subtask must be objective, verifiable, and small enough to complete in one run.
-Return ONLY JSON matching the schema (no markdown, no comments).
-
-Constraints:
-- plan_id: {plan_id}
-- At most {args.max_tasks} subtasks.
-- Use type "time_for_certainty" for every task.
-- Give unique ids (prefix with "{plan_id}-" is fine).
-- Dependencies must reference earlier tasks only.
-- Provide concrete acceptance_criteria that can be checked by simple file existence/contents under outputs/ or repo root.
-- Titles and acceptance_criteria may use concise Chinese (推荐中文说明/注释) when free text is needed.
-
-Input task:
-{user_task}
-Goal context:
-{goal_text}
-
-Schema you must follow:
-{{
-  "plan_id": "string",
-  "tasks": [
-    {{
-      "id": "string",
-      "title": "string",
-      "type": "time_for_certainty",
-      "priority": 0,
-      "estimated_minutes": 0,
-      "dependencies": ["string"],
-      "acceptance_criteria": ["string"]
-    }}
-  ]
-}}
-"""
+    tmpl = (root / "prompts" / "plan.txt").read_text(encoding="utf-8")
+    prompt = tmpl.format(
+        plan_id=plan_id,
+        max_tasks=args.max_tasks,
+        task_text=user_task,
+        goal_text=goal_text,
+    )
 
     raw_plan = run_codex_plan(prompt.strip(), root)
     plan_obj = json.loads(raw_plan)

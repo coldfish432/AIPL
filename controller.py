@@ -19,16 +19,15 @@ def write_json(path: Path, obj):
 
 
 def append_jsonl(path: Path, obj):
-    # 以 JSONL 形式追加一行记录
+    # 以 JSONL 方式追加一行记录
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
 def pick_next_task(backlog: dict, plan_filter: str | None = None):
-    # 从 backlog 中挑选首个可执行的 time_for_certainty 任务，可按 plan_id 过滤
+    # 选取首个可执行的 time_for_certainty 任务
     tasks = backlog.get("tasks", [])
-    # 收集已完成任务用于依赖判定
     if plan_filter:
         done = {t["id"] for t in tasks if t.get("status") == "done" and t.get("plan_id") == plan_filter}
     else:
@@ -38,14 +37,11 @@ def pick_next_task(backlog: dict, plan_filter: str | None = None):
     for t in tasks:
         if plan_filter and t.get("plan_id") != plan_filter:
             continue
-        # 只考虑 todo 状态的任务
         if t.get("status") != "todo":
             continue
         deps = t.get("dependencies", [])
-        # 若依赖未完成则跳过
         if any(dep not in done for dep in deps):
             continue
-        # 仅处理 time_for_certainty 类型
         if t.get("type") != "time_for_certainty":
             continue
         candidates.append(t)
@@ -53,7 +49,6 @@ def pick_next_task(backlog: dict, plan_filter: str | None = None):
     if not candidates:
         return None
 
-    # 按优先级降序取首个
     candidates.sort(key=lambda x: x.get("priority", 0), reverse=True)
     return candidates[0]
 
@@ -61,9 +56,10 @@ def pick_next_task(backlog: dict, plan_filter: str | None = None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan-id", dest="plan_id", help="仅执行匹配该 plan_id 的任务")
+    parser.add_argument("--workspace", dest="workspace", help="目标 workspace 路径，若任务定义了 workspace 则优先用任务配置")
+    parser.add_argument("--max-rounds", dest="max_rounds", type=int, default=3, help="最多重试轮次")
     args = parser.parse_args()
 
-    # 初始化路径与 backlog
     root = Path(__file__).parent
     backlog_path = root / "backlog.json"
     backlog = read_json(backlog_path)
@@ -72,6 +68,7 @@ def main():
     if not task:
         # 自动课程：尝试追加下一条任务
         from curriculum import suggest_next_task
+
         goal_path = root / "goal.txt"
         goal = goal_path.read_text(encoding="utf-8") if goal_path.exists() else "No goal"
 
@@ -86,7 +83,6 @@ def main():
             print("[NOOP] No runnable tasks in backlog.json")
             return
 
-
     task_id = task["id"]
     task_title = task.get("title", "")
     plan_id = task.get("plan_id")
@@ -100,17 +96,22 @@ def main():
     run_dir = root / "artifacts" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    # 解析 workspace
+    workspace_path = args.workspace
+    if isinstance(task.get("workspace"), dict) and task["workspace"].get("path"):
+        workspace_path = task["workspace"]["path"]
+    workspace_path = str(Path(workspace_path).resolve()) if workspace_path else None
+
     # 写入元信息与启动事件
-    write_json(run_dir / "meta.json", {"run_id": run_id, "task_id": task_id, "plan_id": plan_id, "ts": time.time()})
-    append_jsonl(run_dir / "events.jsonl", {"type": "run_init", "run_id": run_id, "task_id": task_id, "plan_id": plan_id, "ts": time.time()})
+    meta = {"run_id": run_id, "task_id": task_id, "plan_id": plan_id, "ts": time.time(), "workspace_path": workspace_path}
+    write_json(run_dir / "meta.json", meta)
+    append_jsonl(run_dir / "events.jsonl", {"type": "run_init", "run_id": run_id, "task_id": task_id, "plan_id": plan_id, "workspace": workspace_path, "ts": time.time()})
 
     step_id = "step-01"
-
     passed = False
     final_reasons = []
+    max_rounds = max(args.max_rounds, 1)
 
-    # 最多尝试 max_rounds 次，真实失败才进入返工
-    max_rounds = 3
     for round_id in range(max_rounds):
         mode = "good"
         round_dir = run_dir / "steps" / step_id / f"round-{round_id}"
@@ -119,15 +120,14 @@ def main():
             {"type": "step_round_start", "task_id": task_id, "plan_id": plan_id, "step": step_id, "round": round_id, "mode": mode, "ts": time.time()}
         )
 
-        # 调用子代理生成输出
         cmd = ["python", "scripts/subagent_shim.py", str(run_dir), task_id, step_id, str(round_id), mode]
+        if workspace_path:
+            cmd.extend(["--workspace", workspace_path])
         subprocess.check_call(cmd, cwd=str(root))
 
-        # 调用验证器检查输出
-        passed, reasons = verify_task(run_dir, task_id)
+        passed, reasons = verify_task(run_dir, task_id, workspace_path=Path(workspace_path) if workspace_path else None)
         final_reasons = reasons
 
-        # 记录本轮验证结果
         write_json(
             round_dir / "verification.json",
             {"passed": passed, "reasons": reasons},
@@ -140,7 +140,7 @@ def main():
 
         if passed:
             break
-        # 若未通过且仍有剩余轮次，创建复盘请求
+
         if round_id < max_rounds - 1:
             stdout_txt = ""
             stdout_path = round_dir / "stdout.txt"
@@ -154,11 +154,12 @@ def main():
                 {
                     "why_failed": reasons,
                     "prev_stdout": stdout_txt,
-                    "next_round_should_do": "Fix outputs so acceptance_criteria pass."
+                    "next_round_should_do": "Fix outputs so acceptance_criteria pass.",
+                    "workspace": workspace_path,
+                    "round": round_id,
                 },
             )
 
-    # 输出可读性更好的索引文件
     index_lines = [
         f"# Run {run_id}",
         f"- Task: {task_id} {task_title}",
@@ -174,7 +175,6 @@ def main():
 
     append_jsonl(run_dir / "events.jsonl", {"type": "run_done", "run_id": run_id, "task_id": task_id, "plan_id": plan_id, "passed": passed, "ts": time.time()})
 
-    # 将结果回写 backlog
     backlog = read_json(backlog_path)
     for t in backlog.get("tasks", []):
         if t.get("id") == task_id:

@@ -1,7 +1,0 @@
-{
-  "ok": true,
-  "produced": [
-    "outputs\\index.md"
-  ],
-  "stdout_summary": "Codex applied writes: outputs/index.md"
-}

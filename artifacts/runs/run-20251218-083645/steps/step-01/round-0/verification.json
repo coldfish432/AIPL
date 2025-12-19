@@ -1,6 +1,0 @@
-{
-  "passed": false,
-  "reasons": [
-    "summary.md missing required fields: Task/Run"
-  ]
-}

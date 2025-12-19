@@ -1,7 +1,0 @@
-{"type": "run_init", "run_id": "run-20251218-092217", "task_id": "T003", "ts": 1766067737.5024998}
-{"type": "step_round_start", "task_id": "T003", "step": "step-01", "round": 0, "mode": "bad", "ts": 1766067737.5028946}
-{"type": "subagent_start", "task_id": "T003", "step": "step-01", "round": 0, "mode": "bad", "ts": 1766067737.5681963}
-{"type": "subagent_done", "task_id": "T003", "step": "step-01", "round": 0, "mode": "bad", "ts": 1766067737.5706348}
-{"type": "step_round_verified", "task_id": "T003", "step": "step-01", "round": 0, "passed": false, "ts": 1766067737.5779283}
-{"type": "step_round_start", "task_id": "T003", "step": "step-01", "round": 1, "mode": "good", "ts": 1766067737.5789168}
-{"type": "subagent_start", "task_id": "T003", "step": "step-01", "round": 1, "mode": "good", "ts": 1766067737.642623}

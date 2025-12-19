@@ -1,99 +1,22 @@
-from pathlib import Path
 import json
 import subprocess
-import textwrap
+from pathlib import Path
 
 
-def run_codex_verify(prompt: str, root_dir: Path) -> dict:
-    cmd = [
-        "codex", "exec",
-        "--full-auto",
-        "--sandbox", "workspace-write",
-        "-C", str(root_dir),
-        "--skip-git-repo-check",
-        "--color", "never",
-    ]
-    result = subprocess.run(
-        cmd,
-        input=prompt,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        shell=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "codex failed").strip())
-    return json.loads(result.stdout.strip())
-
-
-def snapshot_outputs(outputs_dir: Path, max_chars_per_file: int = 2000) -> dict:
-    snap = {}
-    if not outputs_dir.exists():
-        return snap
-    for p in outputs_dir.glob("**/*"):
-        if p.is_file():
-            rel = p.relative_to(outputs_dir.parent)
-            try:
-                txt = p.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                txt = ""
-            snap[str(rel)] = txt[:max_chars_per_file]
-    return snap
-
-
-def _reason(mtype: str, file: str | None = None, expected: str | None = None, actual: str | None = None, hint: str | None = None):
+def _reason(mtype: str, **kwargs):
     r = {"type": mtype}
-    if file:
-        r["file"] = file
-    if expected is not None:
-        r["expected"] = expected
-    if actual is not None:
-        r["actual"] = actual
-    if hint:
-        r["hint"] = hint
+    for k, v in kwargs.items():
+        if v is not None:
+            r[k] = v
     return r
 
 
-def _check_file_exists(run_dir: Path, check: dict, reasons: list) -> bool:
-    path = check.get("path")
-    if not path:
-        reasons.append(_reason("invalid_check", hint="file_exists missing path"))
-        return False
-    target = run_dir / path
-    if not target.exists():
-        reasons.append(_reason("missing_file", file=str(path)))
-        return False
-    return True
-
-
-def _check_file_contains(run_dir: Path, check: dict, reasons: list) -> bool:
-    path = check.get("path")
-    needle = check.get("contains")
-    if not path or needle is None:
-        reasons.append(_reason("invalid_check", hint="file_contains missing path/contains"))
-        return False
-    target = run_dir / path
-    if not target.exists():
-        reasons.append(_reason("missing_file", file=str(path)))
-        return False
-    text = target.read_text(encoding="utf-8", errors="replace")
-    if needle not in text:
-        reasons.append(_reason("content_mismatch", file=str(path), expected=f"contains {needle!r}", actual=text[:200]))
-        return False
-    return True
-
-
-def _check_command(run_dir: Path, check: dict, reasons: list) -> bool:
-    cmd = check.get("cmd")
-    timeout = check.get("timeout", 60)
-    if not cmd:
-        reasons.append(_reason("invalid_check", hint="command missing cmd"))
-        return False
+def _run_command(cmd: str, cwd: Path, timeout: int, log_dir: Path, idx: int):
+    log_dir.mkdir(parents=True, exist_ok=True)
     try:
         result = subprocess.run(
             cmd,
-            cwd=run_dir,
+            cwd=cwd,
             shell=True,
             timeout=timeout,
             capture_output=True,
@@ -102,100 +25,132 @@ def _check_command(run_dir: Path, check: dict, reasons: list) -> bool:
             errors="replace",
         )
     except subprocess.TimeoutExpired as e:
-        reasons.append(_reason("command_timeout", expected=f"timeout<={timeout}s", actual=str(e), file="cmd"))
-        return False
+        (log_dir / f"cmd-{idx}.timeout.txt").write_text(str(e), encoding="utf-8")
+        return False, _reason("command_timeout", cmd=cmd, expected=f"<= {timeout}s", actual=str(e), hint=f"log: verification/cmd-{idx}.timeout.txt")
+
+    (log_dir / f"cmd-{idx}.stdout.txt").write_text(result.stdout or "", encoding="utf-8")
+    (log_dir / f"cmd-{idx}.stderr.txt").write_text(result.stderr or "", encoding="utf-8")
     if result.returncode != 0:
-        reasons.append(
-            _reason(
-                "command_failed",
-                expected="exit code 0",
-                actual=f"code {result.returncode}",
-                hint=f"stdout: {result.stdout[:300]} stderr: {result.stderr[:300]}",
-                file="cmd",
-            )
-        )
-        return False
-    return True
+        hint = f"log: verification/cmd-{idx}.stdout.txt / cmd-{idx}.stderr.txt"
+        return False, _reason("command_failed", cmd=cmd, expected="exit code 0", actual=f"exit code {result.returncode}", hint=hint)
+    return True, None
 
 
-def _run_checks(run_dir: Path, checks: list[dict]) -> tuple[bool, list]:
-    reasons = []
-    passed_all = True
-    for check in checks:
-        ctype = check.get("type")
-        if ctype == "file_exists":
-            ok = _check_file_exists(run_dir, check, reasons)
-        elif ctype == "file_contains":
-            ok = _check_file_contains(run_dir, check, reasons)
-        elif ctype == "command":
-            ok = _check_command(run_dir, check, reasons)
-        else:
-            reasons.append(_reason("unknown_check", hint=json.dumps(check, ensure_ascii=False)))
-            ok = False
-        if not ok:
-            passed_all = False
-    return passed_all, reasons
+def _check_file_exists(base: Path, path: str):
+    target = (base / path).resolve()
+    try:
+        target.relative_to(base.resolve())
+    except Exception:
+        return False, _reason("invalid_path", file=path, hint="escape detected")
+    if not target.exists():
+        return False, _reason("missing_file", file=path)
+    return True, None
+
+
+def _check_file_contains(base: Path, path: str, needle: str):
+    ok, reason = _check_file_exists(base, path)
+    if not ok:
+        return ok, reason
+    target = (base / path).resolve()
+    text = target.read_text(encoding="utf-8", errors="replace")
+    if needle not in text:
+        return False, _reason("content_mismatch", file=path, expected=f"contains {needle!r}", actual=text[:200])
+    return True, None
+
+
+def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None):
+    """
+    优先执行 backlog 中 checks（command/file_exists/file_contains）。
+    如无 checks，回退到 legacy T00x；再无则回退到 LLM verifier（当前未启用）。
+    返回 (passed, reasons[])
+    """
+    root = Path(__file__).resolve().parent
+    backlog_path = root / "backlog.json"
+    acceptance = []
+    checks = []
+    task_workspace = None
+    if backlog_path.exists():
+        spec = json.loads(backlog_path.read_text(encoding="utf-8"))
+        for t in spec.get("tasks", []):
+            if t.get("id") == task_id:
+                acceptance = t.get("acceptance_criteria", [])
+                checks = t.get("checks", [])
+                if isinstance(t.get("workspace"), dict):
+                    task_workspace = t["workspace"].get("path")
+                break
+
+    workspace = workspace_path or (Path(task_workspace) if task_workspace else None)
+    if workspace:
+        workspace = workspace.resolve()
+
+    # 运行 checks
+    if checks and workspace:
+        reasons = []
+        passed = True
+        log_dir = run_dir / "verification"
+        for idx, check in enumerate(checks):
+            ctype = check.get("type")
+            if ctype == "file_exists":
+                ok, r = _check_file_exists(workspace, check.get("path", ""))
+            elif ctype == "file_contains":
+                ok, r = _check_file_contains(workspace, check.get("path", ""), check.get("needle", ""))
+            elif ctype == "command":
+                timeout = int(check.get("timeout", 300))
+                ok, r = _run_command(check.get("cmd", ""), workspace, timeout, log_dir, idx)
+            else:
+                ok, r = False, _reason("unknown_check", hint=json.dumps(check, ensure_ascii=False))
+            if not ok and r:
+                reasons.append(r)
+                passed = False
+        return passed, reasons
+
+    # 兼容旧的 T00x
+    legacy = _legacy_tasks(run_dir, task_id)
+    if legacy is not None:
+        return legacy
+
+    # 最后兜底：无 checks/legacy 时，仅检查是否有 outputs 产物
+    outputs_dir = run_dir / "outputs"
+    if outputs_dir.exists():
+        return True, []
+    return False, [{"type": "unknown", "hint": "no checks provided and no outputs found"}]
 
 
 def _legacy_tasks(run_dir: Path, task_id: str):
     """兼容旧的 T001/T002/T003，便于回放旧案例"""
+    def _run_checks(checks):
+        reasons = []
+        passed_all = True
+        for c in checks:
+            if c["type"] == "file_exists":
+                ok, r = _check_file_exists(run_dir, c["path"])
+            else:
+                ok, r = _check_file_contains(run_dir, c["path"], c["contains"])
+            if not ok:
+                passed_all = False
+                reasons.append(r)
+        return passed_all, reasons
+
     if task_id == "T001":
         checks = [
             {"type": "file_exists", "path": "outputs/result.txt"},
             {"type": "file_contains", "path": "outputs/result.txt", "contains": "OK: deliverable generated"},
         ]
-        return _run_checks(run_dir, checks)
+        return _run_checks(checks)
     if task_id == "T002":
         checks = [
             {"type": "file_exists", "path": "outputs/summary.md"},
             {"type": "file_contains", "path": "outputs/summary.md", "contains": "Task:"},
             {"type": "file_contains", "path": "outputs/summary.md", "contains": "Run:"},
         ]
-        return _run_checks(run_dir, checks)
+        return _run_checks(checks)
     if task_id == "T003":
         checks = [
             {"type": "file_exists", "path": "index.md"},
             {"type": "file_contains", "path": "index.md", "contains": "## Evidence"},
         ]
-        return _run_checks(run_dir, checks)
+        return _run_checks(checks)
     return None
 
-def verify_task(run_dir: Path, task_id: str):
-    """
-    使用 Codex 验收：提供 acceptance_criteria 和 outputs 快照，由 Codex 返回 {passed, reasons[]}。
-    reasons 建议包含 type/file/expected/actual/hint。
-    """
-    root = Path(__file__).resolve().parent
-    backlog_path = root / "backlog.json"
-    acceptance = []
-    if backlog_path.exists():
-        try:
-            spec = json.loads(backlog_path.read_text(encoding="utf-8"))
-            for t in spec.get("tasks", []):
-                if t.get("id") == task_id:
-                    acceptance = t.get("acceptance_criteria", [])
-                    break
-        except Exception:
-            acceptance = []
 
-    outputs_dir = run_dir / "outputs"
-    snap = snapshot_outputs(outputs_dir)
-
-    acceptance_block = "\n".join("- " + c for c in acceptance) if acceptance else "- (none provided)"
-    tmpl = (root / "prompts" / "verifier.txt").read_text(encoding="utf-8")
-    prompt = tmpl.format(
-        task_id=task_id,
-        acceptance_block=acceptance_block,
-        snap_json=json.dumps(snap, ensure_ascii=False),
-    )
-
-    try:
-        result = run_codex_verify(prompt, root)
-    except Exception as e:
-        return False, [{"type": "verifier_error", "hint": str(e)}]
-
-    passed = bool(result.get("passed"))
-    reasons = result.get("reasons", [])
-    if not isinstance(reasons, list):
-        reasons = [{"type": "invalid_output", "hint": str(reasons)}]
-    return passed, reasons
+__all__ = ["verify_task"]

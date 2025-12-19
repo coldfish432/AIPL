@@ -1,0 +1,2 @@
+{"plan_id": "plan-20251219-124224", "id": "plan-20251219-124224-1", "title": "创建文件 hello.txt", "type": "time_for_certainty", "priority": 1, "estimated_minutes": 2, "dependencies": [], "acceptance_criteria": ["repo 根目录存在 hello.txt"]}
+{"plan_id": "plan-20251219-124224", "id": "plan-20251219-124224-2", "title": "写入内容 OK 并校验", "type": "time_for_certainty", "priority": 2, "estimated_minutes": 2, "dependencies": ["plan-20251219-124224-1"], "acceptance_criteria": ["hello.txt 内容完全等于字符串 OK（无额外空格换行）"]}

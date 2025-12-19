@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "produced": [
+    "outputs\\info.txt"
+  ],
+  "stdout_summary": "Codex applied writes: workspace:hello.txt, run:outputs/info.txt",
+  "commands": [],
+  "skipped_writes": []
+}

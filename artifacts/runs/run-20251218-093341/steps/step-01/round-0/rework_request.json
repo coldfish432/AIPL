@@ -1,6 +1,0 @@
-{
-  "why_failed": [
-    "index.md missing '## Evidence'"
-  ],
-  "next_round_should_do": "Fix outputs so acceptance_criteria pass."
-}

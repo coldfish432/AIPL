@@ -7,16 +7,25 @@
       "items": {
         "type": "object",
         "properties": {
+          "target": { "type": "string", "enum": ["workspace", "run"] },
           "path": { "type": "string" },
           "content": { "type": "string" }
         },
-        "required": ["path", "content"],
+        "required": ["target", "path", "content"],
         "additionalProperties": false
       }
     },
     "commands": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "object",
+        "properties": {
+          "cmd": { "type": "string" },
+          "timeout": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["cmd", "timeout"],
+        "additionalProperties": false
+      }
     }
   },
   "required": ["writes", "commands"],

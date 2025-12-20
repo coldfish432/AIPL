@@ -17,7 +17,7 @@ def write_json(path: Path, obj) -> None:
 
 def update_plan_status(root: Path, plan_id: str, removed: list[dict]) -> None:
     """将被清理的任务状态写回对应 plan 文件，避免单独的 archive.json。"""
-    plan_path = root / "artifacts" / "plans" / f"{plan_id}.json"
+    plan_path = root / "artifacts" / "executions" / plan_id / "plan.json"
     if not plan_path.exists():
         return
     plan = read_json(plan_path)
@@ -53,7 +53,7 @@ def main():
 
     print(f"[CLEAN] plan_id={args.plan_id}, removed={len(removed)}, kept={len(keep)}")
     if removed:
-        print(f"[PLAN UPDATED] artifacts/plans/{args.plan_id}.json")
+        print(f"[PLAN UPDATED] artifacts/executions/{args.plan_id}/plan.json")
 
 
 if __name__ == "__main__":

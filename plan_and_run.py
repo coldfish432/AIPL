@@ -65,21 +65,22 @@ def main():
     backlog_path = root / "backlog.json"
     goal_path = root / "goal.txt"
 
-    parser = argparse.ArgumentParser(description="将自然语言任务交给 Codex 拆解并执行")
-    parser.add_argument("--task", required=True, help="要完成的长任务描述")
-    parser.add_argument("--goal", help="可选的目标描述，未提供则读取 goal.txt")
-    parser.add_argument("--plan-id", help="指定 plan_id，缺省自动生成")
-    parser.add_argument("--max-tasks", type=int, default=8, help="拆解的最大子任务数（用于提示词约束）")
-    parser.add_argument("--no-run", action="store_true", help="只生成计划与 backlog，不立即执行")
-    parser.add_argument("--cleanup", action="store_true", help="计划完成/停止后自动清理该 plan 的 backlog 任务，并写回 plan 文件记录状态")
-    parser.add_argument("--workspace", help="目标 workspace 路径，透传给 controller")
+    parser = argparse.ArgumentParser(description="????????? Codex ?????")
+    parser.add_argument("--task", required=True, help="?????????")
+    parser.add_argument("--goal", help="?????????????? goal.txt")
+    parser.add_argument("--plan-id", help="?? plan_id???????")
+    parser.add_argument("--max-tasks", type=int, default=8, help="??????????????????")
+    parser.add_argument("--no-run", action="store_true", help="?????? backlog??????")
+    parser.add_argument("--cleanup", action="store_true", help="????/???????? plan ? backlog ?????? plan ??????")
+    parser.add_argument("--workspace", help="?? workspace ?????? controller")
     args = parser.parse_args()
 
     plan_id = args.plan_id or time.strftime("plan-%Y%m%d-%H%M%S")
     goal_text = args.goal or (goal_path.read_text(encoding="utf-8") if goal_path.exists() else "")
     user_task = args.task.strip()
 
-    backlog = read_json(backlog_path)
+    # ??????????????
+    backlog = {"tasks": []}
 
     tmpl = (root / "prompts" / "plan.txt").read_text(encoding="utf-8")
     prompt = tmpl.format(
@@ -92,10 +93,10 @@ def main():
     raw_plan = run_codex_plan(prompt.strip(), root)
     plan_obj = json.loads(raw_plan)
 
-    plan_dir = root / "artifacts" / "plans"
-    plan_dir.mkdir(parents=True, exist_ok=True)
+    exec_dir = root / "artifacts" / "executions" / plan_id
+    exec_dir.mkdir(parents=True, exist_ok=True)
     write_json(
-        plan_dir / f"{plan_id}.json",
+        exec_dir / "plan.json",
         {
             "plan_id": plan_id,
             "input_task": user_task,
@@ -105,11 +106,12 @@ def main():
             "created_ts": time.time(),
         },
     )
-    tasks_record = plan_dir / f"{plan_id}.tasks.jsonl"
+    tasks_record = exec_dir / "plan.tasks.jsonl"
     with tasks_record.open("w", encoding="utf-8") as f:
         for t in plan_obj.get("tasks", []):
             rec = {"plan_id": plan_id, **t}
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
 
     existing_ids = {t["id"] for t in backlog.get("tasks", [])}
     for idx, t in enumerate(plan_obj.get("tasks", []), 1):
@@ -149,7 +151,7 @@ def main():
             print(f"[PLAN DONE] no todo tasks for plan_id={plan_id}")
             break
         if not has_runnable(backlog, plan_id):
-            print(f"[PLAN STOP] todo tasks remain but no runnable tasks for plan_id={plan_id} (依赖未满足或前置失败)")
+            print(f"[PLAN STOP] todo tasks remain but no runnable tasks for plan_id={plan_id} (??????????)")
             break
         print(f"[RUN] invoking controller for plan_id={plan_id}")
         cmd = ["python", "controller.py", "--plan-id", plan_id]
@@ -168,7 +170,7 @@ def main():
         backlog["tasks"] = keep
         write_json(backlog_path, backlog)
 
-        plan_file = root / "artifacts" / "plans" / f"{plan_id}.json"
+        plan_file = exec_dir / "plan.json"
         if plan_file.exists():
             plan_data = read_json(plan_file)
             plan_data["last_cleanup_ts"] = time.time()

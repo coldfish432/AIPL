@@ -110,6 +110,9 @@ def apply_writes(run_dir: Path, workspace: Path, writes: list[dict], allow_write
         rel_path = w.get("path", "")
         content = w.get("content", "")
         if target == "workspace":
+            if rel_path.replace('\\', '/').startswith('outputs/') or rel_path in ("outputs", "outputs/"):
+                skipped.append({"path": rel_path, "reason": "workspace_outputs_disabled"})
+                continue
             dest = resolve_under(workspace, rel_path)
             if not dest or not is_allowed(dest.relative_to(workspace), allow_write, deny_write):
                 skipped.append({"path": rel_path, "reason": "not_allowed"})
@@ -211,7 +214,21 @@ def main():
         raise RuntimeError("workspace path is required (use --workspace or task.workspace.path)")
     workspace_path = workspace_path.resolve()
     allow_write = []
-    deny_write = [".git", "node_modules", "target", "dist", ".venv", "__pycache__"]
+    deny_write = [".git", "node_modules", "target", "dist", ".venv", "__pycache__", "outputs"]
+
+    # 若存在 policy.json 或 workspace_config.json，则作为默认 allow/deny
+    cfg_path = run_dir / "policy.json"
+    if not cfg_path.exists():
+        cfg_path = run_dir / "workspace_config.json"
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            allow_write = cfg.get("allow_write", allow_write) or allow_write
+            deny_write = cfg.get("deny_write", deny_write) or deny_write
+        except Exception:
+            pass
+    if "outputs" not in deny_write:
+        deny_write.append("outputs")
     if isinstance(task_spec.get("workspace"), dict):
         allow_write = task_spec["workspace"].get("allow_write", []) or allow_write
         deny_write = task_spec["workspace"].get("deny_write", []) or deny_write

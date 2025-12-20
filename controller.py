@@ -3,30 +3,49 @@ import json
 import subprocess
 import time
 from pathlib import Path
+import tomllib
 
 from verifier import verify_task
+from detect_workspace import detect_workspace
 
 
 def read_json(path: Path):
-    # 读取 UTF-8 JSON 文件并反序列化
+    # ?? UTF-8 JSON ???????
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def write_json(path: Path, obj):
-    # 序列化对象为 JSON 文件，若目录缺失则创建
+    # ?????? JSON ???????????
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def append_jsonl(path: Path, obj):
-    # 以 JSONL 方式追加一行记录
+    # ? JSONL ????????
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
+def load_policy(workspace_path: str | None) -> tuple[dict, str]:
+    """
+    ? workspace ?? aipl.policy.json/toml???????? detect_workspace ???????
+    ?? (policy_dict, source)
+    """
+    if not workspace_path:
+        return {}, "none"
+    workspace = Path(workspace_path)
+    json_path = workspace / "aipl.policy.json"
+    toml_path = workspace / "aipl.policy.toml"
+    if json_path.exists():
+        return json.loads(json_path.read_text(encoding="utf-8")), str(json_path)
+    if toml_path.exists():
+        return tomllib.loads(toml_path.read_text(encoding="utf-8")), str(toml_path)
+    return detect_workspace(workspace), "auto_detected"
+
+
 def pick_next_task(backlog: dict, plan_filter: str | None = None):
-    # 选取首个可执行的 time_for_certainty 任务
+    # ???????? time_for_certainty ??
     tasks = backlog.get("tasks", [])
     if plan_filter:
         done = {t["id"] for t in tasks if t.get("status") == "done" and t.get("plan_id") == plan_filter}
@@ -53,11 +72,65 @@ def pick_next_task(backlog: dict, plan_filter: str | None = None):
     return candidates[0]
 
 
+def format_checks(checks: list[dict]) -> list[str]:
+    lines = []
+    for c in checks:
+        ctype = c.get("type")
+        if ctype == "command":
+            timeout = c.get("timeout", "")
+            lines.append(f"- command: {c.get('cmd')} timeout={timeout}")
+        elif ctype == "file_exists":
+            lines.append(f"- file_exists: {c.get('path')}")
+        elif ctype == "file_contains":
+            lines.append(f"- file_contains: {c.get('path')} needle={c.get('needle')}")
+        else:
+            lines.append(f"- unknown: {json.dumps(c, ensure_ascii=False)}")
+    return lines
+
+
+def write_verification_report(run_dir: Path, task_id: str, plan_id: str | None, workspace_path: str | None, passed: bool, reasons: list, checks: list[dict]):
+    lines = [
+        "# Verification Report",
+        f"- task_id: {task_id}",
+        f"- plan_id: {plan_id}",
+        f"- run_dir: {run_dir}",
+        f"- workspace: {workspace_path}",
+        f"- passed: {passed}",
+        "",
+        "## Checks",
+    ]
+    lines.extend(format_checks(checks) or ["- (none)"])
+    lines.append("")
+    lines.append("## How To Verify")
+    if checks:
+        for c in checks:
+            if c.get("type") == "command":
+                lines.append(f"- run: {c.get('cmd')}")
+            elif c.get("type") == "file_exists":
+                lines.append(f"- check file exists: {c.get('path')}")
+            elif c.get("type") == "file_contains":
+                lines.append(f"- check file contains: {c.get('path')} -> {c.get('needle')}")
+            else:
+                lines.append(f"- manual check: {json.dumps(c, ensure_ascii=False)}")
+    else:
+        lines.append("- no checks available")
+
+    lines.append("")
+    lines.append("## Failure Reasons")
+    if reasons:
+        for r in reasons:
+            lines.append(f"- {json.dumps(r, ensure_ascii=False)}")
+    else:
+        lines.append("- none")
+
+    (run_dir / "verification_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--plan-id", dest="plan_id", help="仅执行匹配该 plan_id 的任务")
-    parser.add_argument("--workspace", dest="workspace", help="目标 workspace 路径，若任务定义了 workspace 则优先用任务配置")
-    parser.add_argument("--max-rounds", dest="max_rounds", type=int, default=3, help="最多重试轮次")
+    parser.add_argument("--plan-id", dest="plan_id", help="?????? plan_id ???")
+    parser.add_argument("--workspace", dest="workspace", help="?? workspace ????????? workspace ????????")
+    parser.add_argument("--max-rounds", dest="max_rounds", type=int, default=3, help="??????")
     args = parser.parse_args()
 
     root = Path(__file__).parent
@@ -66,7 +139,6 @@ def main():
 
     task = pick_next_task(backlog, plan_filter=args.plan_id)
     if not task:
-        # 自动课程：尝试追加下一条任务
         from curriculum import suggest_next_task
 
         goal_path = root / "goal.txt"
@@ -87,23 +159,34 @@ def main():
     task_title = task.get("title", "")
     plan_id = task.get("plan_id")
 
-    # 标记为执行中
     task["status"] = "doing"
     write_json(backlog_path, backlog)
 
-    # 创建运行目录
     run_id = time.strftime("run-%Y%m%d-%H%M%S")
-    run_dir = root / "artifacts" / "runs" / run_id
+    if plan_id:
+        exec_dir = root / "artifacts" / "executions" / plan_id
+        exec_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = exec_dir / "runs" / run_id
+    else:
+        run_dir = root / "artifacts" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # 解析 workspace
     workspace_path = args.workspace
     if isinstance(task.get("workspace"), dict) and task["workspace"].get("path"):
         workspace_path = task["workspace"]["path"]
     workspace_path = str(Path(workspace_path).resolve()) if workspace_path else None
 
-    # 写入元信息与启动事件
-    meta = {"run_id": run_id, "task_id": task_id, "plan_id": plan_id, "ts": time.time(), "workspace_path": workspace_path}
+    policy, policy_source = load_policy(workspace_path)
+    write_json(run_dir / "policy.json", policy)
+
+    meta = {
+        "run_id": run_id,
+        "task_id": task_id,
+        "plan_id": plan_id,
+        "ts": time.time(),
+        "workspace_path": workspace_path,
+        "policy_source": policy_source,
+    }
     write_json(run_dir / "meta.json", meta)
     append_jsonl(run_dir / "events.jsonl", {"type": "run_init", "run_id": run_id, "task_id": task_id, "plan_id": plan_id, "workspace": workspace_path, "ts": time.time()})
 
@@ -117,7 +200,7 @@ def main():
         round_dir = run_dir / "steps" / step_id / f"round-{round_id}"
         append_jsonl(
             run_dir / "events.jsonl",
-            {"type": "step_round_start", "task_id": task_id, "plan_id": plan_id, "step": step_id, "round": round_id, "mode": mode, "ts": time.time()}
+            {"type": "step_round_start", "task_id": task_id, "plan_id": plan_id, "step": step_id, "round": round_id, "mode": mode, "ts": time.time()},
         )
 
         cmd = ["python", "scripts/subagent_shim.py", str(run_dir), task_id, step_id, str(round_id), mode]
@@ -160,6 +243,12 @@ def main():
                 },
             )
 
+    # ????????????????
+    task_checks = task.get("checks", []) if isinstance(task.get("checks"), list) else []
+    policy_checks = policy.get("checks", []) if isinstance(policy, dict) else []
+    effective_checks = task_checks or policy_checks
+    write_verification_report(run_dir, task_id, plan_id, workspace_path, passed, final_reasons, effective_checks)
+
     index_lines = [
         f"# Run {run_id}",
         f"- Task: {task_id} {task_title}",
@@ -167,6 +256,8 @@ def main():
         "## Evidence",
         "- meta.json",
         "- events.jsonl",
+        "- policy.json",
+        "- verification_report.md",
         "- outputs/",
         f"- steps/{step_id}/round-0/",
         f"- steps/{step_id}/round-1/",

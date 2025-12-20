@@ -60,8 +60,7 @@ def _check_file_contains(base: Path, path: str, needle: str):
 
 def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None):
     """
-    优先执行 backlog 中 checks（command/file_exists/file_contains）。
-    如无 checks，回退到 legacy T00x；再无则回退到 LLM verifier（当前未启用）。
+    优先执行 checks（任务定义 > policy > legacy）。
     返回 (passed, reasons[])
     """
     root = Path(__file__).resolve().parent
@@ -79,16 +78,26 @@ def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None)
                     task_workspace = t["workspace"].get("path")
                 break
 
+    # policy 兜底 checks
+    policy_checks = []
+    policy_path = run_dir / "policy.json"
+    if not checks and policy_path.exists():
+        try:
+            policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy_checks = policy_data.get("checks", []) or []
+        except Exception:
+            policy_checks = []
+
     workspace = workspace_path or (Path(task_workspace) if task_workspace else None)
     if workspace:
         workspace = workspace.resolve()
 
-    # 运行 checks
-    if checks and workspace:
+    effective_checks = checks or policy_checks
+    if effective_checks and workspace:
         reasons = []
         passed = True
         log_dir = run_dir / "verification"
-        for idx, check in enumerate(checks):
+        for idx, check in enumerate(effective_checks):
             ctype = check.get("type")
             if ctype == "file_exists":
                 ok, r = _check_file_exists(workspace, check.get("path", ""))
@@ -109,7 +118,6 @@ def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None)
     if legacy is not None:
         return legacy
 
-    # 最后兜底：无 checks/legacy 时，仅检查是否有 outputs 产物
     outputs_dir = run_dir / "outputs"
     if outputs_dir.exists():
         return True, []

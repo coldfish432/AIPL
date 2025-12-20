@@ -8,7 +8,7 @@ Constraints:
 - Use type "time_for_certainty" for every task.
 - Give unique ids (prefix with "{plan_id}-" is fine).
 - Dependencies must reference earlier tasks only.
-- Provide concrete acceptance_criteria that can be checked by simple file existence/contents under outputs/ or repo root.
+- Provide concrete acceptance_criteria that can be checked by simple file existence/contents under run_dir/outputs (artifacts/executions/<plan_id>/runs/<run_id>/outputs).
 - Titles and acceptance_criteria may use concise Chinese (推荐中文说明/注释) when free text is needed.
 
 Input task:

@@ -1,0 +1,22 @@
+{
+  "allow_write": [
+    "src",
+    "tests"
+  ],
+  "deny_write": [
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    ".venv",
+    "__pycache__",
+    "outputs"
+  ],
+  "checks": [
+    {
+      "type": "command",
+      "cmd": "python -m pytest -q",
+      "timeout": 300
+    }
+  ]
+}

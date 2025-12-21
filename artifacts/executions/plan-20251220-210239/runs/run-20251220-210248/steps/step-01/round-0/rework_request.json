@@ -1,0 +1,15 @@
+{
+  "why_failed": [
+    {
+      "type": "command_failed",
+      "cmd": "python -m pytest -q",
+      "expected": "exit code 0",
+      "actual": "exit code 1",
+      "hint": "log: verification/cmd-0.stdout.txt / cmd-0.stderr.txt"
+    }
+  ],
+  "prev_stdout": "Codex applied writes: run:outputs/inspect.txt\n[skip_write] outputs/inspect.txt reason=workspace_outputs_disabled\n",
+  "next_round_should_do": "Fix outputs so acceptance_criteria pass.",
+  "workspace": "D:\\AIPL\\demo-workspaces\\python-bugfix",
+  "round": 0
+}

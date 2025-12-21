@@ -193,9 +193,15 @@ def main():
     step_id = "step-01"
     passed = False
     final_reasons = []
+    final_status = "running"
     max_rounds = max(args.max_rounds, 1)
 
     for round_id in range(max_rounds):
+        if (run_dir / "cancel.flag").exists():
+            passed = False
+            final_status = "canceled"
+            final_reasons = [{"type": "canceled", "hint": "cancel.flag detected"}]
+            break
         mode = "good"
         round_dir = run_dir / "steps" / step_id / f"round-{round_id}"
         append_jsonl(
@@ -210,6 +216,7 @@ def main():
 
         passed, reasons = verify_task(run_dir, task_id, workspace_path=Path(workspace_path) if workspace_path else None)
         final_reasons = reasons
+        final_status = "done" if passed else "failed"
 
         write_json(
             round_dir / "verification.json",
@@ -264,12 +271,15 @@ def main():
     ]
     (run_dir / "index.md").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
 
-    append_jsonl(run_dir / "events.jsonl", {"type": "run_done", "run_id": run_id, "task_id": task_id, "plan_id": plan_id, "passed": passed, "ts": time.time()})
+    append_jsonl(run_dir / "events.jsonl", {"type": "run_done", "run_id": run_id, "task_id": task_id, "plan_id": plan_id, "passed": passed, "status": final_status, "ts": time.time()})
 
     backlog = read_json(backlog_path)
     for t in backlog.get("tasks", []):
         if t.get("id") == task_id:
-            t["status"] = "done" if passed else "failed"
+            if final_status == "canceled":
+                t["status"] = "canceled"
+            else:
+                t["status"] = "done" if passed else "failed"
             t["last_run"] = run_id
             t["last_reasons"] = final_reasons
             if plan_id:

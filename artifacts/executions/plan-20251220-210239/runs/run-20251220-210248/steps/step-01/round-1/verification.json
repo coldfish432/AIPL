@@ -1,0 +1,12 @@
+{
+  "passed": false,
+  "reasons": [
+    {
+      "type": "command_failed",
+      "cmd": "python -m pytest -q",
+      "expected": "exit code 0",
+      "actual": "exit code 1",
+      "hint": "log: verification/cmd-0.stdout.txt / cmd-0.stderr.txt"
+    }
+  ]
+}

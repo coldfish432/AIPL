@@ -142,7 +142,6 @@ artifacts/runs/<run_id>/
   * `file_exists`
   * `file_contains`
   * `command`（支持 timeout）
-* 若无 checks，则 fallback 到 legacy 规则（T001/T002/T003）
 * 每次验证返回：
 
   * `passed: true / false`
@@ -368,7 +367,6 @@ artifacts/runs/<run_id>/
   * `file_exists`
   * `file_contains`
   * `command`（支持 timeout）
-* 若无 checks，则 fallback 到 legacy 规则（T001 / T002 / T003）
 * 每次验证返回：
 
   * `passed: true / false`

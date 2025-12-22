@@ -21,11 +21,11 @@ def detect_workspace(workspace: Path) -> dict:
 
     if exists("pom.xml"):
         project_type = "maven"
-        checks.append({"type": "command", "cmd": "mvn -q test", "timeout": 900})
+        checks.append({"type": "command_contains", "cmd": "mvn -q test", "needle": "BUILD SUCCESS", "timeout": 900})
         allow_write = ["src/main/java", "src/test/java"]
     elif exists("build.gradle") or exists("build.gradle.kts"):
         project_type = "gradle"
-        checks.append({"type": "command", "cmd": "gradle test", "timeout": 900})
+        checks.append({"type": "command_contains", "cmd": "gradle test", "needle": "BUILD SUCCESSFUL", "timeout": 900})
         allow_write = ["src/main/java", "src/test/java"]
     elif exists("package.json"):
         project_type = "node"
@@ -33,7 +33,7 @@ def detect_workspace(workspace: Path) -> dict:
         allow_write = ["src", "tests", "test"]
     elif exists("pyproject.toml") or exists("requirements.txt"):
         project_type = "python"
-        checks.append({"type": "command", "cmd": "python -m pytest -q", "timeout": 600})
+        checks.append({"type": "command_contains", "cmd": "python -m pytest -q", "needle": "passed", "timeout": 600})
         allow_write = ["src", "tests", ""]
     else:
         allow_write = [""]

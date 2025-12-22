@@ -204,6 +204,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     task_spec = load_task_spec(root, task_id)
     acceptance = task_spec.get("acceptance_criteria", [])
+    checks = task_spec.get("checks", [])
 
     workspace_path = Path(args.workspace) if args.workspace else None
     if not workspace_path and isinstance(task_spec.get("workspace"), dict):
@@ -260,11 +261,13 @@ def main():
 
     snap = snapshot_outputs(outputs_dir)
     acceptance_block = "\n".join("- " + c for c in acceptance) if acceptance else "- (none provided)"
+    checks_block = json.dumps(checks, ensure_ascii=False, indent=2) if checks else "[]"
     tmpl = (root / "prompts" / "subagent_fix.txt").read_text(encoding="utf-8")
     prompt = tmpl.format(
         task_id=task_id,
         run_name=run_dir.name,
         acceptance_block=acceptance_block,
+        checks_block=checks_block,
         why_failed=why_failed,
         prev_stdout=prev_stdout,
         snap_json=json.dumps(snap, ensure_ascii=False),

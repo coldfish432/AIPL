@@ -8,6 +8,9 @@ Context:
 Acceptance criteria:
 {acceptance_block}
 
+Checks (machine-verifiable):
+{checks_block}
+
 Verifier feedback (why_failed):
 {why_failed}
 
@@ -30,6 +33,10 @@ Produce a JSON object with this exact schema:
 
 Rules:
 - Return ONLY valid JSON. No markdown. No code fences. No commentary.
+Additional rules:
+- Fix only what is required to satisfy checks.
+- If checks include command_contains, make sure output includes the needle.
+- If checks include http_check, ensure the local service is running or record why it cannot be reached.
 - 写入规则：target=workspace 只能写入工作区允许路径；target=run 用于日志/报告。
 - commands 字段必须存在，即使为空列表（如 []），仅使用安全白名单命令（python/pytest/mvn/gradle/npm/node/pnpm/yarn）。
 - 文件内如需注释/提示语，优先使用简洁中文。

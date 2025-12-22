@@ -3,6 +3,7 @@ import json
 import subprocess
 import time
 from pathlib import Path
+import re
 
 
 def read_json(path: Path) -> dict:
@@ -60,6 +61,35 @@ def has_runnable(backlog: dict, plan_id: str) -> bool:
     return False
 
 
+def _extract_outputs_path(text: str) -> list[str]:
+    matches = re.findall(r"(?:run_dir/)?outputs/([A-Za-z0-9_./-]+)", text)
+    return [f"outputs/{m}" for m in matches]
+
+
+def _extract_needle(text: str) -> str | None:
+    for kw in ("contains", "含有", "包含"):
+        if kw in text:
+            after = text.split(kw, 1)[1].strip(" ：:，,。.")
+            # Prefer quoted content if present.
+            m = re.search(r"['\"]([^'\"]+)['\"]", after)
+            if m:
+                return m.group(1).strip()
+            return after.strip() or None
+    return None
+
+
+def derive_checks_from_acceptance(acceptance: list[str]) -> list[dict]:
+    checks: list[dict] = []
+    for line in acceptance or []:
+        for path in _extract_outputs_path(line):
+            needle = _extract_needle(line)
+            if needle:
+                checks.append({"type": "file_contains", "path": path, "needle": needle})
+            else:
+                checks.append({"type": "file_exists", "path": path})
+    return checks
+
+
 def main():
     root = Path(__file__).parent
     backlog_path = root / "backlog.json"
@@ -110,6 +140,8 @@ def main():
     with tasks_record.open("w", encoding="utf-8") as f:
         for t in plan_obj.get("tasks", []):
             rec = {"plan_id": plan_id, **t}
+            if not isinstance(rec.get("checks"), list) or not rec.get("checks"):
+                rec["checks"] = derive_checks_from_acceptance(rec.get("acceptance_criteria", []))
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
@@ -120,6 +152,9 @@ def main():
             task_id = f"{task_id}_{int(time.time())}"
         existing_ids.add(task_id)
 
+        checks = t.get("checks", []) if isinstance(t.get("checks"), list) else []
+        if not checks:
+            checks = derive_checks_from_acceptance(t.get("acceptance_criteria", []))
         backlog.setdefault("tasks", []).append(
             {
                 "id": task_id,
@@ -130,6 +165,7 @@ def main():
                 "status": "todo",
                 "dependencies": t.get("dependencies", []),
                 "acceptance_criteria": t.get("acceptance_criteria", []),
+                "checks": checks,
                 "plan_id": plan_id,
                 "created_from_goal": goal_text,
                 "created_ts": time.time(),

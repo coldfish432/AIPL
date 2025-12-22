@@ -78,11 +78,21 @@ def format_checks(checks: list[dict]) -> list[str]:
         ctype = c.get("type")
         if ctype == "command":
             timeout = c.get("timeout", "")
-            lines.append(f"- command: {c.get('cmd')} timeout={timeout}")
+            expect = c.get("expect_exit_code", 0)
+            cwd = c.get("cwd", "")
+            lines.append(f"- command: {c.get('cmd')} timeout={timeout} expect_exit_code={expect} cwd={cwd}")
+        elif ctype == "command_contains":
+            timeout = c.get("timeout", "")
+            needle = c.get("needle", "")
+            lines.append(f"- command_contains: {c.get('cmd')} needle={needle} timeout={timeout}")
         elif ctype == "file_exists":
             lines.append(f"- file_exists: {c.get('path')}")
         elif ctype == "file_contains":
             lines.append(f"- file_contains: {c.get('path')} needle={c.get('needle')}")
+        elif ctype == "json_schema":
+            lines.append(f"- json_schema: {c.get('path')} schema_path={c.get('schema_path', '')}")
+        elif ctype == "http_check":
+            lines.append(f"- http_check: {c.get('url')} expected_status={c.get('expected_status', 200)}")
         else:
             lines.append(f"- unknown: {json.dumps(c, ensure_ascii=False)}")
     return lines
@@ -105,11 +115,18 @@ def write_verification_report(run_dir: Path, task_id: str, plan_id: str | None, 
     if checks:
         for c in checks:
             if c.get("type") == "command":
-                lines.append(f"- run: {c.get('cmd')}")
+                lines.append(f"- run: {c.get('cmd')} (expect exit {c.get('expect_exit_code', 0)})")
+            elif c.get("type") == "command_contains":
+                lines.append(f"- run: {c.get('cmd')} (expect output contains {c.get('needle')})")
             elif c.get("type") == "file_exists":
                 lines.append(f"- check file exists: {c.get('path')}")
             elif c.get("type") == "file_contains":
                 lines.append(f"- check file contains: {c.get('path')} -> {c.get('needle')}")
+            elif c.get("type") == "json_schema":
+                schema_path = c.get("schema_path") or "<inline schema>"
+                lines.append(f"- validate JSON schema: {c.get('path')} using {schema_path}")
+            elif c.get("type") == "http_check":
+                lines.append(f"- http check: {c.get('url')} expect status {c.get('expected_status', 200)}")
             else:
                 lines.append(f"- manual check: {json.dumps(c, ensure_ascii=False)}")
     else:

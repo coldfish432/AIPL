@@ -20,6 +20,18 @@
           "acceptance_criteria": {
             "type": "array",
             "items": { "type": "string" }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string" }
+              },
+              "required": ["type"],
+              "additionalProperties": true
+            },
+            "minItems": 1
           }
         },
         "required": [
@@ -29,7 +41,8 @@
           "priority",
           "estimated_minutes",
           "dependencies",
-          "acceptance_criteria"
+          "acceptance_criteria",
+          "checks"
         ],
         "additionalProperties": false
       }

@@ -1,81 +1,86 @@
 {
   "tasks": [
     {
-      "id": "plan-20251220-210239-1",
-      "title": "查看代码与测试定位 add() 问题",
+      "id": "plan-20251220-225933-1",
+      "title": "审查 add() 实现并记录问题",
       "type": "time_for_certainty",
       "priority": 1,
       "estimated_minutes": 10,
-      "status": "failed",
+      "status": "done",
       "dependencies": [],
       "acceptance_criteria": [
-        "在 outputs/inspect.txt 记录 add() 所在文件路径与当前实现摘要，存在文件且非空"
+        "在 run_dir/outputs/inspection.txt 存在",
+        "inspection.txt 含有关键字 add() 和 至少一条问题描述"
       ],
-      "plan_id": "plan-20251220-210239",
+      "plan_id": "plan-20251220-225933",
       "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
-      "created_ts": 1766282568.7595756,
-      "last_run": "run-20251220-210248",
-      "last_reasons": [
-        {
-          "type": "command_failed",
-          "cmd": "python -m pytest -q",
-          "expected": "exit code 0",
-          "actual": "exit code 1",
-          "hint": "log: verification/cmd-0.stdout.txt / cmd-0.stderr.txt"
-        }
-      ],
-      "last_plan": "plan-20251220-210239"
+      "created_ts": 1766289582.6730287,
+      "last_run": "run-20251220-225942",
+      "last_reasons": [],
+      "last_plan": "plan-20251220-225933"
     },
     {
-      "id": "plan-20251220-210239-2",
-      "title": "分析需求并确定 add() 正确行为",
+      "id": "plan-20251220-225933-2",
+      "title": "运行现有测试并保存失败日志",
       "type": "time_for_certainty",
       "priority": 2,
       "estimated_minutes": 10,
-      "status": "todo",
+      "status": "done",
       "dependencies": [
-        "plan-20251220-210239-1"
+        "plan-20251220-225933-1"
       ],
       "acceptance_criteria": [
-        "在 outputs/behavior.txt 写明 add() 期望输入输出示例与规则，文件存在且包含至少一组示例"
+        "在 run_dir/outputs/test-before.txt 存在",
+        "test-before.txt 含有 FAIL 关键字"
       ],
-      "plan_id": "plan-20251220-210239",
+      "plan_id": "plan-20251220-225933",
       "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
-      "created_ts": 1766282568.7595801
+      "created_ts": 1766289582.6730332,
+      "last_run": "run-20251220-225951",
+      "last_reasons": [],
+      "last_plan": "plan-20251220-225933"
     },
     {
-      "id": "plan-20251220-210239-3",
-      "title": "修改 add() 实现满足需求",
+      "id": "plan-20251220-225933-3",
+      "title": "修复 add() 使逻辑正确并记录修改摘要",
       "type": "time_for_certainty",
       "priority": 3,
-      "estimated_minutes": 15,
-      "status": "todo",
+      "estimated_minutes": 20,
+      "status": "done",
       "dependencies": [
-        "plan-20251220-210239-2"
+        "plan-20251220-225933-2"
       ],
       "acceptance_criteria": [
-        "add() 所在文件更新完成；在 outputs/change_log.txt 记录修改要点（含文件名与行号范围），文件存在且非空"
+        "在 run_dir/outputs/fix-summary.txt 存在",
+        "fix-summary.txt 含有已修改文件名和修复要点"
       ],
-      "plan_id": "plan-20251220-210239",
+      "plan_id": "plan-20251220-225933",
       "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
-      "created_ts": 1766282568.7595823
+      "created_ts": 1766289582.6730351,
+      "last_run": "run-20251220-230000",
+      "last_reasons": [],
+      "last_plan": "plan-20251220-225933"
     },
     {
-      "id": "plan-20251220-210239-4",
-      "title": "运行测试验证修复",
+      "id": "plan-20251220-225933-4",
+      "title": "再次运行测试确认通过并保存结果",
       "type": "time_for_certainty",
       "priority": 4,
       "estimated_minutes": 10,
-      "status": "todo",
+      "status": "done",
       "dependencies": [
-        "plan-20251220-210239-3"
+        "plan-20251220-225933-3"
       ],
       "acceptance_criteria": [
-        "在 outputs/test_results.txt 保存测试运行输出；文件存在且包含 \"pass\" 字样"
+        "在 run_dir/outputs/test-after.txt 存在",
+        "test-after.txt 含有 PASS 关键字且不含 FAIL"
       ],
-      "plan_id": "plan-20251220-210239",
+      "plan_id": "plan-20251220-225933",
       "created_from_goal": "Build an auditable AI pipeline that can run tasks overnight and verify results in the morning.",
-      "created_ts": 1766282568.7595832
+      "created_ts": 1766289582.6730363,
+      "last_run": "run-20251220-230005",
+      "last_reasons": [],
+      "last_plan": "plan-20251220-225933"
     }
   ]
 }

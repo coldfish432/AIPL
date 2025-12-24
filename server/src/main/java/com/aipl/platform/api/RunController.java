@@ -153,4 +153,15 @@ public class RunController {
         store.upsertRun(res);
         return ApiResponse.ok(res);
     }
+
+    @PostMapping("/runs/{runId}/retry")
+    public ApiResponse<JsonNode> retry(@PathVariable String runId,
+                                       @RequestParam(required = false) String planId,
+                                       @RequestParam(defaultValue = "false") boolean force,
+                                       @RequestParam(defaultValue = "false") boolean retryDeps,
+                                       @RequestParam(required = false) String retryIdSuffix,
+                                       @RequestParam(defaultValue = "false") boolean reuseTaskId) throws Exception {
+        JsonNode res = engine.retry(planId, runId, force, retryDeps, retryIdSuffix, reuseTaskId);
+        return ApiResponse.ok(res);
+    }
 }

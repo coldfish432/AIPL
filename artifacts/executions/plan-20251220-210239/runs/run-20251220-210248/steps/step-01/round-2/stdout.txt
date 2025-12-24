@@ -1,3 +1,0 @@
-Codex applied writes: run:outputs/inspect.txt
-[skip_write] outputs/inspect.txt reason=workspace_outputs_disabled
-[cmd] python -m pytest status=failed rc=1

@@ -16,7 +16,7 @@ def write_json(path: Path, obj) -> None:
 
 
 def update_plan_status(root: Path, plan_id: str, removed: list[dict]) -> None:
-    """将被清理的任务状态写回对应 plan 文件，避免单独的 archive.json。"""
+    """将被清理的任务状态写回对应 plan 文件。"""
     plan_path = root / "artifacts" / "executions" / plan_id / "plan.json"
     if not plan_path.exists():
         return
@@ -32,7 +32,7 @@ def main():
     args = parser.parse_args()
 
     root = Path(__file__).parent
-    backlog_path = root / "backlog.json"
+    backlog_path = root / "backlog" / f"{args.plan_id}.json"
 
     backlog = read_json(backlog_path)
     tasks = backlog.get("tasks", [])

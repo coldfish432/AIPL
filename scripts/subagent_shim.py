@@ -3,6 +3,13 @@ import json
 import subprocess
 import time
 from pathlib import Path
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+
+from policy_validator import validate_writes, validate_commands, default_path_rules
+from profile import ensure_profile, DEFAULT_ALLOWED_COMMANDS, DEFAULT_COMMAND_TIMEOUT
 
 
 def write_json(path: Path, obj):
@@ -45,10 +52,14 @@ def run_codex(prompt: str, root_dir: Path) -> str:
 
 
 def load_task_spec(root: Path, task_id: str) -> dict:
-    backlog = json.loads((root / "backlog.json").read_text(encoding="utf-8"))
-    for t in backlog.get("tasks", []):
-        if t.get("id") == task_id:
-            return t
+    backlog_dir = root / "backlog"
+    if not backlog_dir.exists():
+        return {}
+    for path in sorted(backlog_dir.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for t in data.get("tasks", []):
+            if t.get("id") == task_id:
+                return t
     return {}
 
 
@@ -128,12 +139,11 @@ def apply_writes(run_dir: Path, workspace: Path, writes: list[dict], allow_write
     return produced, skipped
 
 
-def run_commands(workspace: Path, commands, timeout_default: int = 300) -> tuple[list[dict], bool]:
+def run_commands(workspace: Path, commands, timeout_default: int = 300, allowed_prefix: tuple[str, ...] = tuple(DEFAULT_ALLOWED_COMMANDS)) -> tuple[list[dict], bool]:
     """
     执行允许的命令，cwd=workspace。commands 可以是字符串或 {cmd, timeout}。
     白名单前缀：python / pytest / mvn / gradle / npm / node / pnpm / yarn
     """
-    allowed_prefix = ("python", "pytest", "mvn", "gradle", "npm", "node", "pnpm", "yarn")
     logs = []
     all_passed = True
     if not isinstance(commands, list):
@@ -201,7 +211,7 @@ def main():
     outputs_dir = run_dir / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
-    root = Path(__file__).resolve().parent.parent
+    root = ROOT_DIR
     task_spec = load_task_spec(root, task_id)
     acceptance = task_spec.get("acceptance_criteria", [])
     checks = task_spec.get("checks", [])
@@ -216,6 +226,8 @@ def main():
     workspace_path = workspace_path.resolve()
     allow_write = []
     deny_write = [".git", "node_modules", "target", "dist", ".venv", "__pycache__", "outputs"]
+    allowed_commands = list(DEFAULT_ALLOWED_COMMANDS)
+    command_timeout = DEFAULT_COMMAND_TIMEOUT
 
     # 若存在 policy.json 或 workspace_config.json，则作为默认 allow/deny
     cfg_path = run_dir / "policy.json"
@@ -226,13 +238,18 @@ def main():
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
             allow_write = cfg.get("allow_write", allow_write) or allow_write
             deny_write = cfg.get("deny_write", deny_write) or deny_write
+            allowed_commands = cfg.get("allowed_commands", allowed_commands) or allowed_commands
+            command_timeout = int(cfg.get("command_timeout", command_timeout) or command_timeout)
         except Exception:
             pass
     if "outputs" not in deny_write:
         deny_write.append("outputs")
-    if isinstance(task_spec.get("workspace"), dict):
-        allow_write = task_spec["workspace"].get("allow_write", []) or allow_write
-        deny_write = task_spec["workspace"].get("deny_write", []) or deny_write
+    profile = ensure_profile(root, workspace_path)
+    effective_hard = profile.get("effective_hard") or {}
+    allow_write = effective_hard.get("allow_write", allow_write) or allow_write
+    deny_write = effective_hard.get("deny_write", deny_write) or deny_write
+    allowed_commands = effective_hard.get("allowed_commands", allowed_commands) or allowed_commands
+    command_timeout = int(effective_hard.get("command_timeout", command_timeout) or command_timeout)
 
     rework = load_rework(run_dir, step_id, round_id)
     why_failed = ""
@@ -263,6 +280,20 @@ def main():
     acceptance_block = "\n".join("- " + c for c in acceptance) if acceptance else "- (none provided)"
     checks_block = json.dumps(checks, ensure_ascii=False, indent=2) if checks else "[]"
     tmpl = (root / "prompts" / "subagent_fix.txt").read_text(encoding="utf-8")
+    hard_block = json.dumps(
+        {
+            "allow_write": allow_write,
+            "deny_write": deny_write,
+            "allowed_commands": allowed_commands,
+            "command_timeout": command_timeout,
+            "max_concurrency": effective_hard.get("max_concurrency"),
+            "path_rules": default_path_rules(),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    soft_approved = profile.get("soft_approved")
+    soft_block = json.dumps(soft_approved, ensure_ascii=False, indent=2) if soft_approved else "none"
     prompt = tmpl.format(
         task_id=task_id,
         run_name=run_dir.name,
@@ -272,17 +303,21 @@ def main():
         prev_stdout=prev_stdout,
         snap_json=json.dumps(snap, ensure_ascii=False),
         workspace=str(workspace_path),
+        hard_block=hard_block,
+        soft_block=soft_block,
     )
 
     raw = run_codex(prompt, root).strip()
     plan = json.loads(raw)
     writes = plan.get("writes", [])
-    produced_paths, skipped_writes = apply_writes(run_dir, workspace_path, writes, allow_write, deny_write)
+    cleaned_writes, write_reasons = validate_writes(writes, allow_write, deny_write)
+    produced_paths, skipped_writes = apply_writes(run_dir, workspace_path, cleaned_writes, allow_write, deny_write)
 
     cmd_logs = []
     cmds = plan.get("commands", [])
-    if isinstance(cmds, list) and cmds:
-        cmd_logs, cmds_ok = run_commands(workspace_path, cmds)
+    cleaned_cmds, command_reasons = validate_commands(cmds, allowed_commands, command_timeout)
+    if cleaned_cmds:
+        cmd_logs, cmds_ok = run_commands(workspace_path, cleaned_cmds, timeout_default=command_timeout, allowed_prefix=tuple(allowed_commands))
     else:
         cmds_ok = True
 
@@ -291,6 +326,9 @@ def main():
     if skipped_writes:
         for s in skipped_writes:
             stdout_lines.append(f"[skip_write] {s.get('path')} reason={s.get('reason')}")
+    if write_reasons or command_reasons:
+        for r in write_reasons + command_reasons:
+            stdout_lines.append(f"[validation] {json.dumps(r, ensure_ascii=False)}")
     if cmd_logs:
         for log in cmd_logs:
             status = "ok" if log.get("returncode", 0) == 0 else log.get("status", "failed")
@@ -303,6 +341,7 @@ def main():
         "stdout_summary": stdout,
         "commands": cmd_logs,
         "skipped_writes": skipped_writes,
+        "validation_reasons": write_reasons + command_reasons,
     })
     (round_dir / "stdout.txt").write_text(stdout + "\n", encoding="utf-8")
     (round_dir / "stderr.txt").write_text("", encoding="utf-8")

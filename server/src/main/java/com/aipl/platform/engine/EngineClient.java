@@ -124,6 +124,47 @@ public class EngineClient {
         return exec(cmd);
     }
 
+    public JsonNode retry(String planId, String runId, boolean force, boolean retryDeps, String retryIdSuffix, boolean reuseTaskId) throws Exception {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("python");
+        cmd.add("engine_cli.py");
+        cmd.add("retry");
+        if (planId != null && !planId.isBlank()) {
+            cmd.add("--plan-id");
+            cmd.add(planId);
+        }
+        if (runId != null && !runId.isBlank()) {
+            cmd.add("--run-id");
+            cmd.add(runId);
+        }
+        if (force) {
+            cmd.add("--force");
+        }
+        if (retryDeps) {
+            cmd.add("--retry-deps");
+        }
+        if (reuseTaskId) {
+            cmd.add("--reuse-task-id");
+        }
+        if (retryIdSuffix != null && !retryIdSuffix.isBlank()) {
+            cmd.add("--retry-id-suffix");
+            cmd.add(retryIdSuffix);
+        }
+        return exec(cmd);
+    }
+
+    public JsonNode profile(String action, String workspace) throws Exception {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("python");
+        cmd.add("engine_cli.py");
+        cmd.add("profile");
+        cmd.add("--action");
+        cmd.add(action);
+        cmd.add("--workspace");
+        cmd.add(workspace);
+        return exec(cmd);
+    }
+
     private JsonNode exec(List<String> cmd) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(engineRoot.toFile());

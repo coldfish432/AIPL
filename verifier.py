@@ -4,10 +4,21 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from state import ACTIVE_STATUSES
+
 ALLOWED_COMMAND_PREFIXES = ("python", "pytest", "mvn", "gradle", "npm", "node", "pnpm", "yarn")
 MAX_JSON_BYTES = 1024 * 1024
 MAX_SCHEMA_DEPTH = 20
 MAX_SCHEMA_ITEMS = 100
+
+CHECK_REGISTRY: dict[str, callable] = {}
+
+
+def register_check(name: str):
+    def decorator(fn):
+        CHECK_REGISTRY[name] = fn
+        return fn
+    return decorator
 
 
 def _reason(mtype: str, **kwargs):
@@ -96,23 +107,36 @@ def _is_command_allowed(cmd: str, allow_prefixes: tuple[str, ...]):
     return cmd.startswith(allow_prefixes)
 
 
+def _json_contains_dict(actual, expected: dict) -> bool:
+    if not isinstance(actual, dict):
+        return False
+    for k, v in expected.items():
+        if k not in actual or not _json_contains(actual[k], v):
+            return False
+    return True
+
+
+def _json_contains_list(actual, expected: list) -> bool:
+    if not isinstance(actual, list):
+        return False
+    if len(expected) > len(actual):
+        return False
+    for i, v in enumerate(expected):
+        if not _json_contains(actual[i], v):
+            return False
+    return True
+
+
+_JSON_CONTAINS_HANDLERS = {
+    dict: _json_contains_dict,
+    list: _json_contains_list,
+}
+
+
 def _json_contains(actual, expected) -> bool:
-    if isinstance(expected, dict):
-        if not isinstance(actual, dict):
-            return False
-        for k, v in expected.items():
-            if k not in actual or not _json_contains(actual[k], v):
-                return False
-        return True
-    if isinstance(expected, list):
-        if not isinstance(actual, list):
-            return False
-        if len(expected) > len(actual):
-            return False
-        for i, v in enumerate(expected):
-            if not _json_contains(actual[i], v):
-                return False
-        return True
+    handler = _JSON_CONTAINS_HANDLERS.get(type(expected))
+    if handler:
+        return handler(actual, expected)
     return actual == expected
 
 
@@ -126,42 +150,70 @@ def _schema_depth(schema, depth=0) -> int:
     return depth
 
 
+def _validate_object_schema(data, schema) -> tuple[bool, str | None]:
+    if not isinstance(data, dict):
+        return False, "expected object"
+    required = schema.get("required", [])
+    for key in required:
+        if key not in data:
+            return False, f"missing required key: {key}"
+    props = schema.get("properties", {})
+    for key, subschema in props.items():
+        if key in data and isinstance(subschema, dict):
+            ok, err = _validate_schema(data[key], subschema)
+            if not ok:
+                return False, f"key {key}: {err}"
+    return True, None
+
+
+def _validate_array_schema(data, schema) -> tuple[bool, str | None]:
+    if not isinstance(data, list):
+        return False, "expected array"
+    items = schema.get("items")
+    if isinstance(items, dict):
+        for idx, item in enumerate(data[:MAX_SCHEMA_ITEMS]):
+            ok, err = _validate_schema(item, items)
+            if not ok:
+                return False, f"item {idx}: {err}"
+    return True, None
+
+
+def _validate_string_schema(data, schema) -> tuple[bool, str | None]:
+    return (True, None) if isinstance(data, str) else (False, "expected string")
+
+
+def _validate_integer_schema(data, schema) -> tuple[bool, str | None]:
+    return (True, None) if (isinstance(data, int) and not isinstance(data, bool)) else (False, "expected integer")
+
+
+def _validate_number_schema(data, schema) -> tuple[bool, str | None]:
+    return (True, None) if (isinstance(data, (int, float)) and not isinstance(data, bool)) else (False, "expected number")
+
+
+def _validate_boolean_schema(data, schema) -> tuple[bool, str | None]:
+    return (True, None) if isinstance(data, bool) else (False, "expected boolean")
+
+
+def _validate_null_schema(data, schema) -> tuple[bool, str | None]:
+    return (True, None) if data is None else (False, "expected null")
+
+
+_SCHEMA_VALIDATORS = {
+    "object": _validate_object_schema,
+    "array": _validate_array_schema,
+    "string": _validate_string_schema,
+    "integer": _validate_integer_schema,
+    "number": _validate_number_schema,
+    "boolean": _validate_boolean_schema,
+    "null": _validate_null_schema,
+}
+
+
 def _validate_schema(data, schema) -> tuple[bool, str | None]:
     stype = schema.get("type")
-    if stype == "object":
-        if not isinstance(data, dict):
-            return False, "expected object"
-        required = schema.get("required", [])
-        for key in required:
-            if key not in data:
-                return False, f"missing required key: {key}"
-        props = schema.get("properties", {})
-        for key, subschema in props.items():
-            if key in data and isinstance(subschema, dict):
-                ok, err = _validate_schema(data[key], subschema)
-                if not ok:
-                    return False, f"key {key}: {err}"
-        return True, None
-    if stype == "array":
-        if not isinstance(data, list):
-            return False, "expected array"
-        items = schema.get("items")
-        if isinstance(items, dict):
-            for idx, item in enumerate(data[:MAX_SCHEMA_ITEMS]):
-                ok, err = _validate_schema(item, items)
-                if not ok:
-                    return False, f"item {idx}: {err}"
-        return True, None
-    if stype == "string":
-        return (True, None) if isinstance(data, str) else (False, "expected string")
-    if stype == "integer":
-        return (True, None) if (isinstance(data, int) and not isinstance(data, bool)) else (False, "expected integer")
-    if stype == "number":
-        return (True, None) if (isinstance(data, (int, float)) and not isinstance(data, bool)) else (False, "expected number")
-    if stype == "boolean":
-        return (True, None) if isinstance(data, bool) else (False, "expected boolean")
-    if stype == "null":
-        return (True, None) if data is None else (False, "expected null")
+    validator = _SCHEMA_VALIDATORS.get(stype)
+    if validator:
+        return validator(data, schema)
     enum = schema.get("enum")
     if enum is not None:
         return (True, None) if data in enum else (False, "expected enum value")
@@ -174,6 +226,7 @@ def _ensure_workspace(check_type: str, workspace: Path | None):
     return False, _reason("workspace_required", check_type=check_type, hint="workspace path is required for this check")
 
 
+@register_check("file_exists")
 def _handle_file_exists(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     path = check.get("path", "")
     base = _select_base_path(run_dir, workspace, path)
@@ -182,6 +235,7 @@ def _handle_file_exists(check: dict, run_dir: Path, workspace: Path | None, log_
     return _check_file_exists(base, path)
 
 
+@register_check("file_contains")
 def _handle_file_contains(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     path = check.get("path", "")
     base = _select_base_path(run_dir, workspace, path)
@@ -190,6 +244,7 @@ def _handle_file_contains(check: dict, run_dir: Path, workspace: Path | None, lo
     return _check_file_contains(base, path, check.get("needle", ""))
 
 
+@register_check("command")
 def _handle_command(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     ok, r = _ensure_workspace("command", workspace)
     if not ok:
@@ -207,6 +262,7 @@ def _handle_command(check: dict, run_dir: Path, workspace: Path | None, log_dir:
     return ok, r
 
 
+@register_check("command_contains")
 def _handle_command_contains(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     ok, r = _ensure_workspace("command_contains", workspace)
     if not ok:
@@ -245,6 +301,7 @@ def _load_schema(base: Path, schema, schema_path: str | None):
     return json.loads(schema_target.read_text(encoding="utf-8", errors="replace")), None
 
 
+@register_check("json_schema")
 def _handle_json_schema(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     path = check.get("path", "")
     base = _select_base_path(run_dir, workspace, path)
@@ -269,6 +326,7 @@ def _handle_json_schema(check: dict, run_dir: Path, workspace: Path | None, log_
     return ok, None if ok else _reason("schema_mismatch", file=path, expected=str(schema), actual=err)
 
 
+@register_check("http_check")
 def _handle_http_check(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     url = check.get("url", "")
     parsed = urlparse(url)
@@ -301,71 +359,146 @@ def _handle_http_check(check: dict, run_dir: Path, workspace: Path | None, log_d
     return ok, None if ok else _reason("http_json_mismatch", url=url, expected=json_contains, actual=data)
 
 
+def _list_backlog_files(root: Path) -> list[Path]:
+    backlog_dir = root / "backlog"
+    if not backlog_dir.exists():
+        return []
+    return sorted(backlog_dir.glob("*.json"))
+
+
+def _find_task_in_backlog(root: Path, task_id: str) -> dict | None:
+    for path in _list_backlog_files(root):
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for t in data.get("tasks", []):
+            if t.get("status") not in ACTIVE_STATUSES:
+                continue
+            if t.get("id") == task_id:
+                return t
+    return None
+
+
+def _infer_plan_id(root: Path, run_dir: Path) -> str | None:
+    exec_root = root / "artifacts" / "executions"
+    try:
+        rel = run_dir.resolve().relative_to(exec_root.resolve())
+    except Exception:
+        return None
+    parts = rel.parts
+    if not parts:
+        return None
+    return parts[0]
+
+
+def _find_task_in_history(root: Path, plan_id: str, task_id: str) -> dict | None:
+    history_path = root / "artifacts" / "executions" / plan_id / "history.jsonl"
+    if not history_path.exists():
+        return None
+    found = None
+    try:
+        with history_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("id") == task_id:
+                    found = rec
+    except Exception:
+        return None
+    return found
+
+
+def _load_task_context(root: Path, run_dir: Path, task_id: str):
+    task = _find_task_in_backlog(root, task_id)
+    if not task:
+        plan_id = _infer_plan_id(root, run_dir)
+        if plan_id:
+            task = _find_task_in_history(root, plan_id, task_id)
+    if not task:
+        return [], None, None
+    checks = task.get("checks", [])
+    task_workspace = None
+    if isinstance(task.get("workspace"), dict):
+        task_workspace = task["workspace"].get("path")
+    retry_context = None
+    if task.get("last_run") or task.get("last_reasons"):
+        retry_context = _reason(
+            "retry_context",
+            last_run=task.get("last_run"),
+            last_reasons=task.get("last_reasons"),
+        )
+    return checks, task_workspace, retry_context
+
+
+def _load_policy_checks(run_dir: Path) -> list[dict]:
+    policy_path = run_dir / "policy.json"
+    if not policy_path.exists():
+        return []
+    try:
+        policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
+        return policy_data.get("checks", []) or []
+    except Exception:
+        return []
+
+
+def _resolve_workspace(workspace_path: Path | None, task_workspace: str | None) -> Path | None:
+    workspace = workspace_path or (Path(task_workspace) if task_workspace else None)
+    return workspace.resolve() if workspace else None
+
+
+def _fallback_verify(run_dir: Path, retry_context: dict | None):
+    outputs_dir = run_dir / "outputs"
+    if outputs_dir.exists():
+        return True, []
+    reasons = [{"type": "unknown", "hint": "no checks provided and no outputs found"}]
+    if retry_context:
+        reasons.append(retry_context)
+    return False, reasons
+
+
+def _run_checks(effective_checks: list[dict], run_dir: Path, workspace: Path | None, retry_context: dict | None):
+    reasons = []
+    passed = True
+    log_dir = run_dir / "verification"
+    for idx, check in enumerate(effective_checks):
+        ctype = check.get("type")
+        handler = CHECK_REGISTRY.get(ctype)
+        if handler:
+            ok, r = handler(check, run_dir, workspace, log_dir, idx)
+        else:
+            ok, r = False, _reason("unknown_check", hint=json.dumps(check, ensure_ascii=False))
+        if not ok and r:
+            reasons.append(r)
+            passed = False
+    if not passed and retry_context:
+        reasons.append(retry_context)
+    return passed, reasons
+
+
 def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None):
     """
     优先执行 checks（任务定义 > policy）。
     返回 (passed, reasons[])
     """
     root = Path(__file__).resolve().parent
-    backlog_path = root / "backlog.json"
-    acceptance = []
-    checks = []
-    task_workspace = None
-    if backlog_path.exists():
-        spec = json.loads(backlog_path.read_text(encoding="utf-8"))
-        for t in spec.get("tasks", []):
-            if t.get("id") == task_id:
-                acceptance = t.get("acceptance_criteria", [])
-                checks = t.get("checks", [])
-                if isinstance(t.get("workspace"), dict):
-                    task_workspace = t["workspace"].get("path")
-                break
-
-    # policy 兜底 checks
-    policy_checks = []
-    policy_path = run_dir / "policy.json"
-    if not checks and policy_path.exists():
-        try:
-            policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
-            policy_checks = policy_data.get("checks", []) or []
-        except Exception:
-            policy_checks = []
-
-    workspace = workspace_path or (Path(task_workspace) if task_workspace else None)
-    if workspace:
-        workspace = workspace.resolve()
-
+    checks, task_workspace, retry_context = _load_task_context(root, run_dir, task_id)
+    policy_checks = [] if checks else _load_policy_checks(run_dir)
+    workspace = _resolve_workspace(workspace_path, task_workspace)
     effective_checks = checks or policy_checks
+    if not effective_checks:
+        return _fallback_verify(run_dir, retry_context)
     has_http_check = any(c.get("type") == "http_check" for c in effective_checks)
-    if effective_checks and (workspace or has_http_check):
-        reasons = []
-        passed = True
-        log_dir = run_dir / "verification"
-        handlers = {
-            "file_exists": _handle_file_exists,
-            "file_contains": _handle_file_contains,
-            "command": _handle_command,
-            "command_contains": _handle_command_contains,
-            "json_schema": _handle_json_schema,
-            "http_check": _handle_http_check,
-        }
-        for idx, check in enumerate(effective_checks):
-            ctype = check.get("type")
-            handler = handlers.get(ctype)
-            if handler:
-                ok, r = handler(check, run_dir, workspace, log_dir, idx)
-            else:
-                ok, r = False, _reason("unknown_check", hint=json.dumps(check, ensure_ascii=False))
-            if not ok and r:
-                reasons.append(r)
-                passed = False
-        return passed, reasons
-
-    # 兼容旧的 T00x
-    outputs_dir = run_dir / "outputs"
-    if outputs_dir.exists():
-        return True, []
-    return False, [{"type": "unknown", "hint": "no checks provided and no outputs found"}]
+    if not (workspace or has_http_check):
+        return _fallback_verify(run_dir, retry_context)
+    return _run_checks(effective_checks, run_dir, workspace, retry_context)
 
 
 __all__ = ["verify_task"]

@@ -5,7 +5,12 @@ import subprocess
 import time
 import uuid
 import hashlib
+import sqlite3
 from pathlib import Path
+
+from config import resolve_db_path
+from profile_store import ensure_profile_tables
+from profile import ensure_profile, propose_soft, approve_soft, reject_soft
 
 
 def envelope(ok: bool, data=None, error=None):
@@ -20,6 +25,71 @@ def envelope(ok: bool, data=None, error=None):
 
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _resolve_db_path(root: Path) -> Path | None:
+    return resolve_db_path(root)
+
+
+def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, plan_id TEXT, status TEXT, updated_at INTEGER, raw_json TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, updated_at INTEGER, raw_json TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS event_cursors (run_id TEXT PRIMARY KEY, cursor INTEGER, updated_at INTEGER)")
+    ensure_profile_tables(conn)
+
+
+def _mirror_plan_to_sqlite(res: dict, root: Path) -> None:
+    data = res.get("data") if isinstance(res, dict) else None
+    if not isinstance(data, dict):
+        return
+    plan_id = data.get("plan_id")
+    if not plan_id:
+        return
+    db_path = _resolve_db_path(root)
+    if not db_path:
+        return
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_json = json.dumps(res, ensure_ascii=False)
+        now_ms = int(time.time() * 1000)
+        with sqlite3.connect(str(db_path)) as conn:
+            _ensure_sqlite_schema(conn)
+            conn.execute(
+                "INSERT INTO plans(plan_id, updated_at, raw_json) VALUES(?,?,?) "
+                "ON CONFLICT(plan_id) DO UPDATE SET updated_at=excluded.updated_at, raw_json=excluded.raw_json",
+                (plan_id, now_ms, raw_json),
+            )
+            conn.commit()
+    except Exception:
+        return
+
+
+def _mirror_run_to_sqlite(res: dict, root: Path) -> None:
+    data = res.get("data") if isinstance(res, dict) else None
+    if not isinstance(data, dict):
+        return
+    run_id = data.get("run_id")
+    if not run_id:
+        return
+    db_path = _resolve_db_path(root)
+    if not db_path:
+        return
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_json = json.dumps(res, ensure_ascii=False)
+        now_ms = int(time.time() * 1000)
+        plan_id = data.get("plan_id")
+        status = data.get("status")
+        with sqlite3.connect(str(db_path)) as conn:
+            _ensure_sqlite_schema(conn)
+            conn.execute(
+                "INSERT INTO runs(run_id, plan_id, status, updated_at, raw_json) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(run_id) DO UPDATE SET plan_id=excluded.plan_id, status=excluded.status, updated_at=excluded.updated_at, raw_json=excluded.raw_json",
+                (run_id, plan_id, status, now_ms, raw_json),
+            )
+            conn.commit()
+    except Exception:
+        return
 
 
 def find_latest_run(exec_dir: Path) -> Path | None:
@@ -155,7 +225,9 @@ def cmd_plan(args, root: Path):
         "backlog_written": True,
         "artifacts_root": str(exec_dir),
     }
-    print(json.dumps(envelope(True, data=data), ensure_ascii=False))
+    res = envelope(True, data=data)
+    _mirror_plan_to_sqlite(res, root)
+    print(json.dumps(res, ensure_ascii=False))
 
 
 def cmd_run(args, root: Path):
@@ -172,7 +244,9 @@ def cmd_run(args, root: Path):
         "plan_id": plan_id,
         "status": status.get("status"),
     }
-    print(json.dumps(envelope(True, data=data), ensure_ascii=False))
+    res = envelope(True, data=data)
+    _mirror_run_to_sqlite(res, root)
+    print(json.dumps(res, ensure_ascii=False))
 
 
 def cmd_status(args, root: Path):
@@ -180,7 +254,9 @@ def cmd_status(args, root: Path):
     if not run_dir:
         print(json.dumps(envelope(False, error="run not found"), ensure_ascii=False))
         return
-    print(json.dumps(envelope(True, data=read_status(run_dir)), ensure_ascii=False))
+    res = envelope(True, data=read_status(run_dir))
+    _mirror_run_to_sqlite(res, root)
+    print(json.dumps(res, ensure_ascii=False))
 
 
 def cmd_events(args, root: Path):
@@ -246,7 +322,45 @@ def cmd_cancel(args, root: Path):
     flag = run_dir / "cancel.flag"
     flag.write_text(str(int(time.time())), encoding="utf-8")
     data = {"run_id": run_dir.name, "status": "canceled"}
-    print(json.dumps(envelope(True, data=data), ensure_ascii=False))
+    res = envelope(True, data=data)
+    _mirror_run_to_sqlite(res, root)
+    print(json.dumps(res, ensure_ascii=False))
+
+
+def cmd_profile(args, root: Path):
+    if not args.workspace:
+        print(json.dumps(envelope(False, error="workspace is required"), ensure_ascii=False))
+        return
+    workspace = Path(args.workspace)
+    action = args.action
+    if action == "get":
+        profile = ensure_profile(root, workspace)
+    elif action == "propose":
+        profile = propose_soft(root, workspace, reason="manual")
+    elif action == "approve":
+        profile = approve_soft(root, workspace)
+    elif action == "reject":
+        profile = reject_soft(root, workspace)
+    else:
+        print(json.dumps(envelope(False, error="unknown action"), ensure_ascii=False))
+        return
+
+    effective_hard = profile.get("effective_hard")
+    if effective_hard is None:
+        effective_hard = ensure_profile(root, workspace).get("effective_hard")
+    payload = {
+        "workspace_id": profile.get("workspace_id"),
+        "workspace_path": profile.get("workspace_path"),
+        "fingerprint": profile.get("fingerprint"),
+        "effective_hard": effective_hard,
+        "system_hard": profile.get("system_hard"),
+        "user_hard": profile.get("user_hard"),
+        "soft_draft": profile.get("soft_draft"),
+        "soft_approved": profile.get("soft_approved"),
+        "soft_version": profile.get("soft_version"),
+    }
+    res = envelope(True, data=payload)
+    print(json.dumps(res, ensure_ascii=False))
 
 
 def main():
@@ -287,6 +401,11 @@ def main():
     p_cancel.add_argument("--plan-id")
     p_cancel.add_argument("--run-id")
     p_cancel.set_defaults(func=cmd_cancel)
+
+    p_profile = sub.add_parser("profile")
+    p_profile.add_argument("--action", required=True, choices=["get", "propose", "approve", "reject"])
+    p_profile.add_argument("--workspace", required=True)
+    p_profile.set_defaults(func=cmd_profile)
 
     args = parser.parse_args()
     args.func(args, root)

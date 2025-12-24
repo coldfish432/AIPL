@@ -38,18 +38,20 @@
 - 拆解结果写入：
   - `artifacts/plans/<plan_id>.json`
   - `artifacts/plans/<plan_id>.tasks.jsonl`
-- 子任务自动追加到 `backlog.json`，无需人工手写
+- 子任务自动追加到 `backlog/<plan_id>.json`，无需人工手写
 
 ---
 
 ### 2. 全局任务状态管理（Backlog）
 
 **对应模块：**
-- `backlog.json`
+- `backlog/adhoc.json`
+- `backlog/<plan_id>.json`
 
 **已实现功能：**
 
-- `backlog.json` 作为全局唯一任务状态源
+- `backlog/` 作为任务状态源，按 plan 分片
+- 非 plan 任务写入 `backlog/adhoc.json`
 - 每个任务支持状态流转：
   - `todo → doing → done / failed`
 - 支持字段：
@@ -71,7 +73,7 @@
 
 **已实现功能：**
 
-- 从 `backlog.json` 中挑选：
+- 从 `backlog/` 中挑选：
   - 状态为 `todo`
   - 依赖已完成
   - 类型为 `time_for_certainty` 的任务
@@ -250,7 +252,7 @@ artifacts/runs/<run_id>/
 
   * `artifacts/plans/<plan_id>.json`
   * `artifacts/plans/<plan_id>.tasks.jsonl`
-* 子任务自动追加到 `backlog.json`，无需人工手写
+* 子任务自动追加到 `backlog/<plan_id>.json`，无需人工手写
 
 ---
 
@@ -258,11 +260,13 @@ artifacts/runs/<run_id>/
 
 **对应模块：**
 
-* `backlog.json`
+* `backlog/adhoc.json`
+* `backlog/<plan_id>.json`
 
 **已实现功能：**
 
-* `backlog.json` 作为全局唯一任务状态源
+* `backlog/` 作为任务状态源，按 plan 分片
+* 非 plan 任务写入 `backlog/adhoc.json`
 * 每个任务支持状态流转：
 
   ```
@@ -289,7 +293,7 @@ artifacts/runs/<run_id>/
 
 **已实现功能：**
 
-* 从 `backlog.json` 中挑选：
+* 从 `backlog/` 中挑选：
 
   * 状态为 `todo`
   * 依赖已完成
@@ -437,3 +441,14 @@ generate → verify → fail → explain → repair → verify
 
 `// 2025.12.20 //`
 
+
+---
+
+## 运维补充：活跃队列 + 归档
+
+* 活跃队列仅保留 `todo/doing`：
+* `backlog/adhoc.json`：非 plan 的临时任务
+* `backlog/<plan_id>.json`：按 plan 分片的活跃任务
+* 任务完成/失败/取消后从 backlog 移除，并追加归档：
+  * `artifacts/executions/<plan_id>/history.jsonl`
+  * 归档记录包含 `last_run` / `last_reasons`，用于回放与追溯

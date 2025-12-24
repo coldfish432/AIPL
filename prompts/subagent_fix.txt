@@ -4,6 +4,10 @@ Context:
 - Task ID: {task_id}
 - Run: {run_name}
 - Workspace: {workspace}
+- Hard policy (must obey):
+{hard_block}
+- Soft profile (reference only, do not change permissions):
+{soft_block}
 
 Acceptance criteria:
 {acceptance_block}

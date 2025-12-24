@@ -5,6 +5,28 @@
 - Java Spring Boot gateway (server/)
 - Workspace Profile: hard policy (enforced) + soft profile (advisory, approved only)
 
+## Architecture and Flow
+The engine follows a deterministic pipeline that keeps LLM output tightly controlled:
+
+1. **Goal intake & planning** – `engine_cli.py` and `plan_and_run.py` accept a goal and use the prompt in `prompts/plan.txt` to generate a structured plan with tasks, dependencies, and checks. Plans are saved under `backlog/<plan_id>.json` and `artifacts/plans/` for auditability.
+2. **Task scheduling** – `controller.py` reads active backlog entries and creates isolated run directories under `artifacts/executions/<plan_id>/runs/<run_id>/`, tracking status transitions in `artifacts/state/events.jsonl`.
+3. **Scoped execution** – `scripts/subagent_shim.py` wraps the sub-agent to ensure it only writes inside the run workspace. It consumes prompts like `prompts/subagent_fix.txt` and emits filesystem changes validated by `schemas/codex_writes.schema.json`.
+4. **Verification and feedback** – `verifier.py` uses the checks embedded in each task (see `schemas/plan.schema.json` for structure) together with `prompts/verifier.txt` to run deterministic validations (file existence, commands, schema checks). Results are written to `verification.json`; failures produce `rework_request.json` to trigger another iteration.
+5. **Policy enforcement** – Workspace policies defined in `config.py`, `policy_validator.py`, and `profile.py` combine mandatory hard rules (write scope, allowed commands, timeouts) with optional soft profiles stored via `profile_store.py`. Soft suggestions never override hard policy but can guide prompts after approval.
+
+This loop repeats until tasks pass verification or exhaust retries, creating a full audit trail (inputs, outputs, and failure reasons) that can be replayed for debugging.
+
+## Project Structure
+- `engine_cli.py`, `plan_and_run.py`: CLI entrypoints for running end-to-end flows or managing profiles.
+- `controller.py`: Picks runnable tasks from backlogs and orchestrates run directories.
+- `verifier.py`: Executes checks defined in tasks and reports structured success/failure reasons.
+- `scripts/subagent_shim.py`: Sandboxes the sub-agent and enforces write scopes.
+- `schemas/`: JSON Schemas for task plans and write operations.
+- `prompts/`: Prompt templates for planner, sub-agent, and verifier.
+- `artifacts/`: Generated plans, runs, snapshots, and audit logs (created at runtime).
+- `server/`: Spring Boot gateway exposing HTTP APIs for profiles and goal execution.
+- `demo-workspaces/`: Example workspaces for local demos.
+
 ## Server
 ```
 cd server

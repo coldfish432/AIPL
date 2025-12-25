@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plan_id": { "type": "string" },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "type": { "type": "string", "const": "time_for_certainty" },
+          "priority": { "type": "integer" },
+          "estimated_minutes": { "type": "integer" },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string" },
+                "path": { "type": "string" },
+                "needle": { "type": "string" },
+                "cmd": { "type": "string" },
+                "timeout": { "type": "integer" },
+                "expect_exit_code": { "type": "integer" },
+                "cwd": { "type": "string" },
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "schema_path": { "type": "string" },
+                "url": { "type": "string" },
+                "expected_status": { "type": "integer" },
+                "contains": { "type": "string" },
+                "json_contains": {
+                  "type": "object",
+                  "properties": {},
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "allow_prefixes": { "type": "array", "items": { "type": "string" } },
+                "allow_hosts": { "type": "array", "items": { "type": "string" } },
+                "method": { "type": "string" }
+              },
+              "required": [
+                "type",
+                "path",
+                "needle",
+                "cmd",
+                "timeout",
+                "expect_exit_code",
+                "cwd",
+                "schema",
+                "schema_path",
+                "url",
+                "expected_status",
+                "contains",
+                "json_contains",
+                "allow_prefixes",
+                "allow_hosts",
+                "method"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "type",
+          "priority",
+          "estimated_minutes",
+          "dependencies",
+          "acceptance_criteria",
+          "checks"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["plan_id", "tasks"],
+  "additionalProperties": false
+}

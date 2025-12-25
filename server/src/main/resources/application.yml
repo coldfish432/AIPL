@@ -1,0 +1,9 @@
+server:
+  port: 8088
+  address: 127.0.0.1
+
+
+app:
+  engineRoot: ".."
+  dbPath: "data/aipl.db"
+  maxWorkers: 2

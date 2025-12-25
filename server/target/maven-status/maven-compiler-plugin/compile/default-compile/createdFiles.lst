@@ -1,0 +1,14 @@
+com\aipl\platform\store\JobService.class
+com\aipl\platform\api\RunController.class
+com\aipl\platform\api\JobRequest.class
+com\aipl\platform\api\HealthController.class
+com\aipl\platform\api\ApiResponse.class
+com\aipl\platform\PlatformApplication.class
+com\aipl\platform\engine\EngineClient.class
+com\aipl\platform\api\PlanRequest.class
+com\aipl\platform\api\ProfileRequest.class
+com\aipl\platform\config\ApiKeyFilter.class
+com\aipl\platform\api\RunRequest.class
+com\aipl\platform\engine\EnginePaths.class
+com\aipl\platform\api\ProfileController.class
+com\aipl\platform\store\RunStore.class

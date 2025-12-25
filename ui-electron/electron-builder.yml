@@ -1,0 +1,19 @@
+﻿appId: com.aipl.console
+productName: AIPL Console
+files:
+  - dist/**
+  - package.json
+extraResources:
+  - from: resources/server.jar
+    to: server.jar
+  - from: resources/jre
+    to: jre
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: AIPL Console
+win:
+  target: nsis
+  icon: assets/icon.png

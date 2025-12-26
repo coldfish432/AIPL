@@ -9,8 +9,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
 from policy_validator import validate_writes, validate_commands, default_path_rules
-from profile import ensure_profile, DEFAULT_ALLOWED_COMMANDS, DEFAULT_COMMAND_TIMEOUT
-from code_graph import CodeGraph
+from services.profile_service import ensure_profile, DEFAULT_ALLOWED_COMMANDS, DEFAULT_COMMAND_TIMEOUT
+from services.code_graph_service import CodeGraph
 
 
 def write_json(path: Path, obj):

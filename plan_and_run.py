@@ -10,9 +10,10 @@ from state import (
     DEFAULT_STALE_SECONDS,
     scan_backlog_for_stale,
 )
-from profile import ensure_profile, propose_soft, DEFAULT_ALLOWED_COMMANDS, compute_fingerprint
+from services.profile_service import DEFAULT_ALLOWED_COMMANDS, compute_fingerprint
 from policy_validator import validate_checks, default_path_rules
-from code_graph import CodeGraph
+from services.code_graph_service import CodeGraphService
+from services.profile_service import ProfileService
 
 
 def read_json(path: Path) -> dict:
@@ -191,6 +192,8 @@ def main():
     parser.add_argument("--stale-auto-reset", action="store_true", default=DEFAULT_STALE_AUTO_RESET, help="auto reset stale tasks to todo")
     parser.add_argument("--no-stale-auto-reset", action="store_true", help="disable auto reset even if env enables it")
     args = parser.parse_args()
+    profile_service = ProfileService()
+    code_graph_service = CodeGraphService()
 
     plan_id = args.plan_id or time.strftime("plan-%Y%m%d-%H%M%S")
     user_task = args.task.strip()
@@ -206,11 +209,11 @@ def main():
     soft_block = "none"
     allowed_commands = list(DEFAULT_ALLOWED_COMMANDS)
     if args.workspace:
-        profile = ensure_profile(root, Path(args.workspace))
+        profile = profile_service.ensure_profile(root, Path(args.workspace))
         if profile.get("created"):
-            profile = propose_soft(root, Path(args.workspace), reason="new_workspace")
+            profile = profile_service.propose_soft(root, Path(args.workspace), reason="new_workspace")
         elif profile.get("fingerprint_changed"):
-            profile = propose_soft(root, Path(args.workspace), reason="fingerprint_changed")
+            profile = profile_service.propose_soft(root, Path(args.workspace), reason="fingerprint_changed")
         effective_hard = profile.get("effective_hard") or {}
         allowed_commands = effective_hard.get("allowed_commands", allowed_commands) or allowed_commands
         hard_block = json.dumps(
@@ -253,15 +256,15 @@ def main():
         needs_build = True
         if graph_path.exists():
             try:
-                existing = CodeGraph.load(graph_path)
+                existing = code_graph_service.load(graph_path)
                 if existing.fingerprint == workspace_fingerprint:
                     needs_build = False
             except Exception:
                 needs_build = True
         if needs_build:
             try:
-                graph = CodeGraph.build(workspace_path, fingerprint=workspace_fingerprint)
-                graph.save(graph_path)
+                graph = code_graph_service.build(workspace_path, fingerprint=workspace_fingerprint)
+                code_graph_service.save(graph, graph_path)
                 print(f"[GRAPH] built code graph at {graph_path}")
             except Exception as e:
                 print(f"[GRAPH] failed to build code graph: {e}")
@@ -347,7 +350,7 @@ def main():
             stop_reason = "no_runnable"
             break
         print(f"[RUN] invoking controller for plan_id={plan_id}")
-        cmd = ["python", "controller.py", "--plan-id", plan_id]
+        cmd = ["python", "-m", "services.controller_service", "--plan-id", plan_id]
         if args.workspace:
             cmd.extend(["--workspace", args.workspace])
         subprocess.check_call(cmd, cwd=root)

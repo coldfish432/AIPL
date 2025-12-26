@@ -1,0 +1,50 @@
+﻿name: CI
+
+on:
+  push:
+    branches: [ main, "refactor/**" ]
+  pull_request:
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+      - name: Run Python tests
+        run: pytest -q
+
+  java-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Run Maven tests
+        working-directory: server
+        run: mvn -q test
+
+  ui-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install UI deps
+        working-directory: ui-electron
+        run: npm ci
+      - name: Run UI tests
+        working-directory: ui-electron
+        run: npm test

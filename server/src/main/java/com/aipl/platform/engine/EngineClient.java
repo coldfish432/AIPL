@@ -8,7 +8,6 @@ import org.springframework.stereotype.Component;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 @Component
@@ -21,147 +20,74 @@ public class EngineClient {
     }
 
     public JsonNode run(String task, String planId, String workspace) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add("python");
-        cmd.add("engine_cli.py");
-        cmd.add("run");
-        cmd.add("--task");
-        cmd.add(task);
-        if (planId != null && !planId.isBlank()) {
-            cmd.add("--plan-id");
-            cmd.add(planId);
-        }
-        if (workspace != null && !workspace.isBlank()) {
-            cmd.add("--workspace");
-            cmd.add(workspace);
-        }
+        List<String> cmd = new EngineCommandBuilder("run")
+                .arg("--task", task)
+                .arg("--plan-id", planId)
+                .arg("--workspace", workspace)
+                .build();
         return exec(cmd);
     }
 
     public JsonNode plan(String task, String planId, String workspace) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add("python");
-        cmd.add("engine_cli.py");
-        cmd.add("plan");
-        cmd.add("--task");
-        cmd.add(task);
-        if (planId != null && !planId.isBlank()) {
-            cmd.add("--plan-id");
-            cmd.add(planId);
-        }
-        if (workspace != null && !workspace.isBlank()) {
-            cmd.add("--workspace");
-            cmd.add(workspace);
-        }
+        List<String> cmd = new EngineCommandBuilder("plan")
+                .arg("--task", task)
+                .arg("--plan-id", planId)
+                .arg("--workspace", workspace)
+                .build();
         return exec(cmd);
     }
 
     public JsonNode status(String planId, String runId) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add("python");
-        cmd.add("engine_cli.py");
-        cmd.add("status");
-        if (planId != null && !planId.isBlank()) {
-            cmd.add("--plan-id");
-            cmd.add(planId);
-        }
-        if (runId != null && !runId.isBlank()) {
-            cmd.add("--run-id");
-            cmd.add(runId);
-        }
+        List<String> cmd = new EngineCommandBuilder("status")
+                .arg("--plan-id", planId)
+                .arg("--run-id", runId)
+                .build();
         return exec(cmd);
     }
 
     public JsonNode events(String planId, String runId, int cursor, int limit) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add("python");
-        cmd.add("engine_cli.py");
-        cmd.add("events");
-        if (planId != null && !planId.isBlank()) {
-            cmd.add("--plan-id");
-            cmd.add(planId);
-        }
-        if (runId != null && !runId.isBlank()) {
-            cmd.add("--run-id");
-            cmd.add(runId);
-        }
-        cmd.add("--cursor");
-        cmd.add(String.valueOf(cursor));
-        cmd.add("--limit");
-        cmd.add(String.valueOf(limit));
+        List<String> cmd = new EngineCommandBuilder("events")
+                .arg("--plan-id", planId)
+                .arg("--run-id", runId)
+                .arg("--cursor", String.valueOf(cursor))
+                .arg("--limit", String.valueOf(limit))
+                .build();
         return exec(cmd);
     }
 
     public JsonNode artifacts(String planId, String runId) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add("python");
-        cmd.add("engine_cli.py");
-        cmd.add("artifacts");
-        if (planId != null && !planId.isBlank()) {
-            cmd.add("--plan-id");
-            cmd.add(planId);
-        }
-        if (runId != null && !runId.isBlank()) {
-            cmd.add("--run-id");
-            cmd.add(runId);
-        }
+        List<String> cmd = new EngineCommandBuilder("artifacts")
+                .arg("--plan-id", planId)
+                .arg("--run-id", runId)
+                .build();
         return exec(cmd);
     }
 
     public JsonNode cancel(String planId, String runId) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add("python");
-        cmd.add("engine_cli.py");
-        cmd.add("cancel");
-        if (planId != null && !planId.isBlank()) {
-            cmd.add("--plan-id");
-            cmd.add(planId);
-        }
-        if (runId != null && !runId.isBlank()) {
-            cmd.add("--run-id");
-            cmd.add(runId);
-        }
+        List<String> cmd = new EngineCommandBuilder("cancel")
+                .arg("--plan-id", planId)
+                .arg("--run-id", runId)
+                .build();
         return exec(cmd);
     }
 
     public JsonNode retry(String planId, String runId, boolean force, boolean retryDeps, String retryIdSuffix, boolean reuseTaskId) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add("python");
-        cmd.add("engine_cli.py");
-        cmd.add("retry");
-        if (planId != null && !planId.isBlank()) {
-            cmd.add("--plan-id");
-            cmd.add(planId);
-        }
-        if (runId != null && !runId.isBlank()) {
-            cmd.add("--run-id");
-            cmd.add(runId);
-        }
-        if (force) {
-            cmd.add("--force");
-        }
-        if (retryDeps) {
-            cmd.add("--retry-deps");
-        }
-        if (reuseTaskId) {
-            cmd.add("--reuse-task-id");
-        }
-        if (retryIdSuffix != null && !retryIdSuffix.isBlank()) {
-            cmd.add("--retry-id-suffix");
-            cmd.add(retryIdSuffix);
-        }
+        List<String> cmd = new EngineCommandBuilder("retry")
+                .arg("--plan-id", planId)
+                .arg("--run-id", runId)
+                .flag("--force", force)
+                .flag("--retry-deps", retryDeps)
+                .flag("--reuse-task-id", reuseTaskId)
+                .arg("--retry-id-suffix", retryIdSuffix)
+                .build();
         return exec(cmd);
     }
 
     public JsonNode profile(String action, String workspace) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add("python");
-        cmd.add("engine_cli.py");
-        cmd.add("profile");
-        cmd.add("--action");
-        cmd.add(action);
-        cmd.add("--workspace");
-        cmd.add(workspace);
+        List<String> cmd = new EngineCommandBuilder("profile")
+                .arg("--action", action)
+                .arg("--workspace", workspace)
+                .build();
         return exec(cmd);
     }
 

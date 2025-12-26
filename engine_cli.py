@@ -10,8 +10,9 @@ from pathlib import Path
 
 from config import resolve_db_path
 from profile_store import ensure_profile_tables
-from profile import ensure_profile, propose_soft, approve_soft, reject_soft, compute_fingerprint
-from code_graph import CodeGraph
+from services.profile_service import compute_fingerprint
+from services.code_graph_service import CodeGraphService
+from services.profile_service import ProfileService
 
 
 def envelope(ok: bool, data=None, error=None):
@@ -329,19 +330,20 @@ def cmd_cancel(args, root: Path):
 
 
 def cmd_profile(args, root: Path):
+    profile_service = ProfileService()
     if not args.workspace:
         print(json.dumps(envelope(False, error="workspace is required"), ensure_ascii=False))
         return
     workspace = Path(args.workspace)
     action = args.action
     if action == "get":
-        profile = ensure_profile(root, workspace)
+        profile = profile_service.ensure_profile(root, workspace)
     elif action == "propose":
-        profile = propose_soft(root, workspace, reason="manual")
+        profile = profile_service.propose_soft(root, workspace, reason="manual")
     elif action == "approve":
-        profile = approve_soft(root, workspace)
+        profile = profile_service.approve_soft(root, workspace)
     elif action == "reject":
-        profile = reject_soft(root, workspace)
+        profile = profile_service.reject_soft(root, workspace)
     else:
         print(json.dumps(envelope(False, error="unknown action"), ensure_ascii=False))
         return
@@ -365,13 +367,14 @@ def cmd_profile(args, root: Path):
 
 
 def cmd_code_graph_build(args, root: Path):
+    code_graph_service = CodeGraphService()
     workspace = Path(args.workspace)
     fingerprint = compute_fingerprint(workspace)
-    graph = CodeGraph.build(workspace, fingerprint=fingerprint)
+    graph = code_graph_service.build(workspace, fingerprint=fingerprint)
     graph_path = None
     if args.output:
         graph_path = Path(args.output)
-        graph.save(graph_path)
+        code_graph_service.save(graph, graph_path)
     data = {
         "workspace": str(workspace.resolve()),
         "fingerprint": fingerprint,
@@ -382,18 +385,19 @@ def cmd_code_graph_build(args, root: Path):
 
 
 def cmd_code_graph_related(args, root: Path):
+    code_graph_service = CodeGraphService()
     workspace = Path(args.workspace)
     graph = None
     if args.graph:
         graph_path = Path(args.graph)
         if graph_path.exists():
             try:
-                graph = CodeGraph.load(graph_path)
+                graph = code_graph_service.load(graph_path)
             except Exception:
                 graph = None
     if not graph:
         fingerprint = compute_fingerprint(workspace)
-        graph = CodeGraph.build(workspace, fingerprint=fingerprint)
+        graph = code_graph_service.build(workspace, fingerprint=fingerprint)
     related = graph.related_files([args.file], max_hops=args.max_hops)
     data = {
         "file": args.file,

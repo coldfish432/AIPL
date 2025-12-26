@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow } from "electron";
 import path from "path";
 import { pathToFileURL } from "url";
-import { startJavaServer, stopJavaServer } from "./backend";
-import { isPortInUse } from "./ports";
+import { ServerManager } from "./server";
 
 let mainWindow: BrowserWindow | null = null;
+const serverManager = new ServerManager();
 let stopping = false;
 
 async function createWindow() {
@@ -23,14 +23,7 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  const inUse = await isPortInUse(18088);
-  if (inUse) {
-    dialog.showErrorBox("Port in use", "Port 18088 is already in use. Please stop it and try again.");
-    app.exit(1);
-    return;
-  }
-
-  const ok = await startJavaServer();
+  const ok = await serverManager.start();
   if (!ok) {
     app.exit(1);
     return;
@@ -43,7 +36,7 @@ app.on("before-quit", async (event) => {
   if (stopping) return;
   stopping = true;
   event.preventDefault();
-  await stopJavaServer();
+  await serverManager.stop();
   app.exit();
 });
 

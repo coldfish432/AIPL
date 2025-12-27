@@ -9,36 +9,15 @@ from pathlib import Path
 
 import tomllib
 
-from config import resolve_db_path
+from config import (
+    DEFAULT_ALLOWED_COMMANDS,
+    DEFAULT_COMMAND_TIMEOUT,
+    DEFAULT_DENY_WRITE,
+    DEFAULT_MAX_CONCURRENCY,
+    resolve_db_path,
+)
 from profile_store import ensure_profile_tables, read_profile, upsert_profile, log_review
 from soft_proposer import propose_soft_profile
-
-DEFAULT_DENY_WRITE = [
-    ".git",
-    "node_modules",
-    "target",
-    "dist",
-    "build",
-    ".venv",
-    "__pycache__",
-    "artifacts",
-    "runs",
-    "outputs",
-]
-
-DEFAULT_ALLOWED_COMMANDS = [
-    "python",
-    "pytest",
-    "mvn",
-    "gradle",
-    "npm",
-    "node",
-    "pnpm",
-    "yarn",
-]
-
-DEFAULT_COMMAND_TIMEOUT = 300
-DEFAULT_MAX_CONCURRENCY = 2
 
 FINGERPRINT_FILES = [
     "pom.xml",

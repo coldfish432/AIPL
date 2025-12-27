@@ -4,8 +4,11 @@ import json
 import os
 import re
 import time
+import hashlib
+import threading
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 
 MAX_FILE_BYTES = 512 * 1024
@@ -33,6 +36,13 @@ LANG_BY_EXT = {
 }
 
 JS_TS_EXTS = [".ts", ".tsx", ".js", ".jsx"]
+
+
+def _env_bool(key: str, default: bool = False) -> bool:
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_rel_path(workspace_root: Path, path: str | Path) -> str | None:
@@ -439,9 +449,200 @@ def _is_test_file(rel_path: str) -> bool:
     return False
 
 
+def _get_cache_root() -> Path:
+    root = os.getenv("AIPL_CODE_GRAPH_CACHE_ROOT")
+    if root:
+        return Path(root)
+    return Path.cwd()
+
+
+def _get_cache_path(workspace_root: Path, fingerprint: str | None) -> Path:
+    cache_root = _get_cache_root() / "artifacts"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    key = fingerprint or hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()
+    return cache_root / f"code-graph-cache-{key}.json"
+
+
+def _load_cache(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"files": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"files": {}}
+    if not isinstance(data, dict):
+        return {"files": {}}
+    data.setdefault("files", {})
+    return data
+
+
+def _save_cache(path: Path, cache: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _parse_file_meta(workspace_root: Path, rel_path: str, lang: str, text: str) -> dict[str, Any]:
+    meta: dict[str, Any] = {"lang": lang}
+    if lang == "python":
+        meta["imports"] = _parse_python_imports(text)
+    elif lang == "java":
+        meta["java_package"] = _parse_java_package(text)
+        meta["class_name"] = Path(rel_path).stem
+        meta["imports"] = _parse_java_imports(text)
+    elif lang in ("ts", "js"):
+        meta["imports"] = _parse_js_imports(text)
+    else:
+        meta["imports"] = []
+    return meta
+
+
+def _scan_files_incremental(workspace_root: Path, cache: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    files_cache: dict[str, Any] = cache.get("files", {}) or {}
+    seen: set[str] = set()
+    for root, dirs, files in os.walk(workspace_root):
+        rel_dir = _normalize_rel_path(workspace_root, root)
+        if rel_dir:
+            parts = set(rel_dir.split("/"))
+            if parts & DEFAULT_EXCLUDE_DIRS:
+                dirs[:] = []
+                continue
+        dirs[:] = [d for d in dirs if d not in DEFAULT_EXCLUDE_DIRS]
+        for name in files:
+            ext = Path(name).suffix.lower()
+            lang = LANG_BY_EXT.get(ext)
+            if not lang:
+                continue
+            file_path = Path(root) / name
+            try:
+                stat = file_path.stat()
+            except Exception:
+                continue
+            if stat.st_size > MAX_FILE_BYTES:
+                continue
+            rel_path = _normalize_rel_path(workspace_root, file_path)
+            if not rel_path:
+                continue
+            seen.add(rel_path)
+            cached = files_cache.get(rel_path)
+            if cached and cached.get("mtime") == stat.st_mtime and cached.get("size") == stat.st_size and cached.get("lang") == lang:
+                meta = dict(cached)
+            else:
+                try:
+                    text = file_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                meta = _parse_file_meta(workspace_root, rel_path, lang, text)
+                meta["mtime"] = stat.st_mtime
+                meta["size"] = stat.st_size
+            meta["path"] = rel_path
+            files_cache[rel_path] = {k: v for k, v in meta.items() if k != "path"}
+            results.append(meta)
+    for rel_path in list(files_cache.keys()):
+        if rel_path not in seen:
+            files_cache.pop(rel_path, None)
+    cache["files"] = files_cache
+    return results, cache
+
+
+def _build_from_meta(workspace_root: Path, fingerprint: str | None, files_meta: list[dict[str, Any]]) -> CodeGraph:
+    graph = CodeGraph(workspace_root, fingerprint=fingerprint)
+    java_class_map: dict[str, str] = {}
+    for entry in files_meta:
+        rel_path = entry["path"]
+        lang = entry["lang"]
+        graph._ensure_node(rel_path, lang)
+        if lang == "java":
+            pkg = entry.get("java_package") or ""
+            class_name = entry.get("class_name") or Path(rel_path).stem
+            full = f"{pkg}.{class_name}" if pkg else class_name
+            java_class_map[full] = rel_path
+    for entry in files_meta:
+        rel_path = entry["path"]
+        lang = entry["lang"]
+        imports = entry.get("imports") or []
+        if lang == "python":
+            for imp in imports:
+                for target in _resolve_python_import(workspace_root, rel_path, imp):
+                    graph._add_edge(rel_path, target, "imports")
+        elif lang == "java":
+            for imp in imports:
+                if imp.endswith(".*"):
+                    continue
+                target = java_class_map.get(imp)
+                if target:
+                    graph._add_edge(rel_path, target, "imports")
+        elif lang in ("ts", "js"):
+            for spec in imports:
+                for target in _resolve_js_import(workspace_root, rel_path, spec):
+                    graph._add_edge(rel_path, target, "imports")
+    graph._finalize_deps()
+    return graph
+
+
+def _refresh_cache(workspace_root: Path, fingerprint: str | None, cache_path: Path) -> None:
+    cache = _load_cache(cache_path)
+    _, cache = _scan_files_incremental(workspace_root, cache)
+    cache["workspace_root"] = str(workspace_root)
+    cache["fingerprint"] = fingerprint
+    cache["generated_at"] = int(time.time())
+    _save_cache(cache_path, cache)
+
+
+_WATCHERS: dict[str, Any] = {}
+
+
+def _start_watch(workspace_root: Path, fingerprint: str | None, cache_path: Path) -> None:
+    key = str(cache_path)
+    if key in _WATCHERS:
+        return
+    try:
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
+    except Exception:
+        print("[GRAPH] watchdog not available; skip watch")
+        return
+
+    class _Handler(FileSystemEventHandler):
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self._last = 0.0
+
+        def on_any_event(self, event) -> None:
+            now = time.time()
+            with self._lock:
+                if now - self._last < 0.5:
+                    return
+                self._last = now
+            try:
+                _refresh_cache(workspace_root, fingerprint, cache_path)
+            except Exception:
+                return
+
+    observer = Observer()
+    handler = _Handler()
+    observer.schedule(handler, str(workspace_root), recursive=True)
+    observer.daemon = True
+    observer.start()
+    _WATCHERS[key] = observer
+
+
 class CodeGraphService:
-    def build(self, workspace_root: Path, fingerprint: str | None = None) -> CodeGraph:
-        return CodeGraph.build(workspace_root, fingerprint=fingerprint)
+    def build(self, workspace_root: Path, fingerprint: str | None = None, *, watch: bool = False) -> CodeGraph:
+        use_cache = os.getenv("AIPL_CODE_GRAPH_CACHE", "1") != "0"
+        watch = watch or _env_bool("AIPL_CODE_GRAPH_WATCH", False)
+        if not use_cache:
+            return CodeGraph.build(workspace_root, fingerprint=fingerprint)
+        cache_path = _get_cache_path(workspace_root, fingerprint)
+        cache = _load_cache(cache_path)
+        files_meta, cache = _scan_files_incremental(workspace_root, cache)
+        cache["workspace_root"] = str(workspace_root)
+        cache["fingerprint"] = fingerprint
+        cache["generated_at"] = int(time.time())
+        _save_cache(cache_path, cache)
+        if watch:
+            _start_watch(workspace_root, fingerprint, cache_path)
+        return _build_from_meta(workspace_root, fingerprint, files_meta)
 
     def load(self, path: Path) -> CodeGraph:
         return CodeGraph.load(path)

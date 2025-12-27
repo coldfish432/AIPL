@@ -8,22 +8,10 @@ import sys
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
+from infra.io_utils import append_jsonl, write_json
 from policy_validator import validate_writes, validate_commands, default_path_rules
-from services.profile_service import ensure_profile, DEFAULT_ALLOWED_COMMANDS, DEFAULT_COMMAND_TIMEOUT
+from services.profile_service import ensure_profile, DEFAULT_ALLOWED_COMMANDS, DEFAULT_COMMAND_TIMEOUT, DEFAULT_DENY_WRITE
 from services.code_graph_service import CodeGraph
-
-
-def write_json(path: Path, obj):
-    # 将对象序列化成 JSON 文件，确保父目录存在
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def append_jsonl(path: Path, obj):
-    # 以 JSONL 方式追加单行事件
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
 def run_codex(prompt: str, root_dir: Path) -> str:
@@ -301,7 +289,7 @@ def main():
         raise RuntimeError("workspace path is required (use --workspace or task.workspace.path)")
     workspace_path = workspace_path.resolve()
     allow_write = []
-    deny_write = [".git", "node_modules", "target", "dist", ".venv", "__pycache__", "outputs"]
+    deny_write = list(DEFAULT_DENY_WRITE)
     allowed_commands = list(DEFAULT_ALLOWED_COMMANDS)
     command_timeout = DEFAULT_COMMAND_TIMEOUT
 

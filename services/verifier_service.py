@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from config import DEFAULT_ALLOWED_COMMANDS
 from state import ACTIVE_STATUSES
 
-ALLOWED_COMMAND_PREFIXES = ("python", "pytest", "mvn", "gradle", "npm", "node", "pnpm", "yarn")
+ALLOWED_COMMAND_PREFIXES = tuple(DEFAULT_ALLOWED_COMMANDS)
 MAX_JSON_BYTES = 1024 * 1024
 MAX_SCHEMA_DEPTH = 20
 MAX_SCHEMA_ITEMS = 100
@@ -33,6 +35,23 @@ def _reason(mtype: str, **kwargs):
 
 def _run_command(cmd: str, cwd: Path, timeout: int, log_dir: Path, idx: int, expect_exit_code: int):
     log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = log_dir / f"cmd-{idx}.stdout.txt"
+    stderr_path = log_dir / f"cmd-{idx}.stderr.txt"
+    timeout_path = log_dir / f"cmd-{idx}.timeout.txt"
+    try:
+        stdout_rel = stdout_path.relative_to(log_dir.parent).as_posix()
+        stderr_rel = stderr_path.relative_to(log_dir.parent).as_posix()
+        timeout_rel = timeout_path.relative_to(log_dir.parent).as_posix()
+    except Exception:
+        stdout_rel = stdout_path.as_posix()
+        stderr_rel = stderr_path.as_posix()
+        timeout_rel = timeout_path.as_posix()
+    info = {
+        "cmd": cmd,
+        "expected_exit_code": expect_exit_code,
+        "stdout_log": stdout_rel,
+        "stderr_log": stderr_rel,
+    }
     try:
         result = subprocess.run(
             cmd,
@@ -45,15 +64,19 @@ def _run_command(cmd: str, cwd: Path, timeout: int, log_dir: Path, idx: int, exp
             errors="replace",
         )
     except subprocess.TimeoutExpired as e:
-        (log_dir / f"cmd-{idx}.timeout.txt").write_text(str(e), encoding="utf-8")
-        return False, _reason("command_timeout", cmd=cmd, expected=f"<= {timeout}s", actual=str(e), hint=f"log: verification/cmd-{idx}.timeout.txt"), "", ""
+        timeout_path.write_text(str(e), encoding="utf-8")
+        info.update({"status": "timeout", "timeout": timeout, "timeout_log": timeout_rel})
+        return False, _reason("command_timeout", cmd=cmd, expected=f"<= {timeout}s", actual=str(e), hint=f"log: {timeout_rel}"), info
 
-    (log_dir / f"cmd-{idx}.stdout.txt").write_text(result.stdout or "", encoding="utf-8")
-    (log_dir / f"cmd-{idx}.stderr.txt").write_text(result.stderr or "", encoding="utf-8")
+    stdout_path.write_text(result.stdout or "", encoding="utf-8")
+    stderr_path.write_text(result.stderr or "", encoding="utf-8")
+    info.update({"returncode": result.returncode})
     if result.returncode != expect_exit_code:
-        hint = f"log: verification/cmd-{idx}.stdout.txt / cmd-{idx}.stderr.txt"
-        return False, _reason("command_failed", cmd=cmd, expected=f"exit code {expect_exit_code}", actual=f"exit code {result.returncode}", hint=hint), result.stdout, result.stderr
-    return True, None, result.stdout, result.stderr
+        hint = f"log: {stdout_rel} / {stderr_rel}"
+        info["status"] = "failed"
+        return False, _reason("command_failed", cmd=cmd, expected=f"exit code {expect_exit_code}", actual=f"exit code {result.returncode}", hint=hint), info
+    info["status"] = "ok"
+    return True, None, info
 
 
 def _check_file_exists(base: Path, path: str):
@@ -107,6 +130,31 @@ def _normalize_prefixes(prefixes) -> tuple[str, ...]:
 def _is_command_allowed(cmd: str, allow_prefixes: tuple[str, ...]):
     cmd = cmd.strip()
     return cmd.startswith(allow_prefixes)
+
+
+def _has_execution_check(checks: list[dict]) -> bool:
+    for check in checks or []:
+        if check.get("type") in {"command", "command_contains", "http_check"}:
+            return True
+    return False
+
+
+def _merge_checks(task_checks: list[dict], policy_checks: list[dict], high_risk: bool = False) -> list[dict]:
+    if _has_execution_check(task_checks) and not high_risk:
+        return list(task_checks or [])
+    merged = list(task_checks or [])
+    merged.extend(policy_checks or [])
+    return merged
+
+
+def _is_high_risk(value) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, (int, float)) and value >= 7:
+        return True
+    if isinstance(value, str) and value.strip().lower() in {"high", "critical"}:
+        return True
+    return False
 
 
 def _json_contains_dict(actual, expected: dict) -> bool:
@@ -233,8 +281,10 @@ def _handle_file_exists(check: dict, run_dir: Path, workspace: Path | None, log_
     path = check.get("path", "")
     base = _select_base_path(run_dir, workspace, path)
     if not base:
-        return False, _reason("workspace_required", check_type="file_exists", hint="workspace path is required for this check")
-    return _check_file_exists(base, path)
+        return False, _reason("workspace_required", check_type="file_exists", hint="workspace path is required for this check"), None
+    ok, reason = _check_file_exists(base, path)
+    info = {"path": path}
+    return ok, reason, info
 
 
 @register_check("file_contains")
@@ -242,50 +292,58 @@ def _handle_file_contains(check: dict, run_dir: Path, workspace: Path | None, lo
     path = check.get("path", "")
     base = _select_base_path(run_dir, workspace, path)
     if not base:
-        return False, _reason("workspace_required", check_type="file_contains", hint="workspace path is required for this check")
-    return _check_file_contains(base, path, check.get("needle", ""))
+        return False, _reason("workspace_required", check_type="file_contains", hint="workspace path is required for this check"), None
+    ok, reason = _check_file_contains(base, path, check.get("needle", ""))
+    info = {"path": path, "needle": check.get("needle", "")}
+    return ok, reason, info
 
 
 @register_check("command")
 def _handle_command(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     ok, r = _ensure_workspace("command", workspace)
     if not ok:
-        return ok, r
+        return ok, r, None
     cmd = check.get("cmd", "")
     allow_prefixes = _normalize_prefixes(check.get("allow_prefixes")) or ALLOWED_COMMAND_PREFIXES
     if not _is_command_allowed(cmd, allow_prefixes):
-        return False, _reason("command_not_allowed", cmd=cmd, expected=f"prefix in {allow_prefixes}")
+        return False, _reason("command_not_allowed", cmd=cmd, expected=f"prefix in {allow_prefixes}"), {"cmd": cmd, "status": "skipped"}
     timeout = int(check.get("timeout", 300))
     expect_exit_code = int(check.get("expect_exit_code", 0))
     cwd = _resolve_cwd(workspace, check.get("cwd"))
     if not cwd:
-        return False, _reason("invalid_cwd", cwd=check.get("cwd"))
-    ok, r, _, _ = _run_command(cmd, cwd, timeout, log_dir, idx, expect_exit_code)
-    return ok, r
+        return False, _reason("invalid_cwd", cwd=check.get("cwd")), {"cmd": cmd, "status": "invalid_cwd"}
+    ok, r, info = _run_command(cmd, cwd, timeout, log_dir, idx, expect_exit_code)
+    return ok, r, info
 
 
 @register_check("command_contains")
 def _handle_command_contains(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     ok, r = _ensure_workspace("command_contains", workspace)
     if not ok:
-        return ok, r
+        return ok, r, None
     cmd = check.get("cmd", "")
     needle = check.get("needle", "")
     allow_prefixes = _normalize_prefixes(check.get("allow_prefixes")) or ALLOWED_COMMAND_PREFIXES
     if not _is_command_allowed(cmd, allow_prefixes):
-        return False, _reason("command_not_allowed", cmd=cmd, expected=f"prefix in {allow_prefixes}")
+        return False, _reason("command_not_allowed", cmd=cmd, expected=f"prefix in {allow_prefixes}"), {"cmd": cmd, "status": "skipped"}
     timeout = int(check.get("timeout", 300))
     expect_exit_code = int(check.get("expect_exit_code", 0))
     cwd = _resolve_cwd(workspace, check.get("cwd"))
     if not cwd:
-        return False, _reason("invalid_cwd", cwd=check.get("cwd"))
-    ok, r, stdout, stderr = _run_command(cmd, cwd, timeout, log_dir, idx, expect_exit_code)
+        return False, _reason("invalid_cwd", cwd=check.get("cwd")), {"cmd": cmd, "status": "invalid_cwd"}
+    ok, r, info = _run_command(cmd, cwd, timeout, log_dir, idx, expect_exit_code)
     if not ok:
-        return ok, r
+        return ok, r, info
+    stdout_path = log_dir / f"cmd-{idx}.stdout.txt"
+    stderr_path = log_dir / f"cmd-{idx}.stderr.txt"
+    stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
+    stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
     hay = (stdout or "") + "\n" + (stderr or "")
     if needle not in hay:
-        return False, _reason("command_output_missing", cmd=cmd, expected=f"contains {needle!r}", actual=hay[:200])
-    return True, None
+        if isinstance(info, dict):
+            info["status"] = "output_missing"
+        return False, _reason("command_output_missing", cmd=cmd, expected=f"contains {needle!r}", actual=hay[:200]), info
+    return True, None, info
 
 
 def _load_schema(base: Path, schema, schema_path: str | None):
@@ -308,24 +366,26 @@ def _handle_json_schema(check: dict, run_dir: Path, workspace: Path | None, log_
     path = check.get("path", "")
     base = _select_base_path(run_dir, workspace, path)
     if not base:
-        return False, _reason("workspace_required", check_type="json_schema", hint="workspace path is required for this check")
+        return False, _reason("workspace_required", check_type="json_schema", hint="workspace path is required for this check"), None
     target = (base / path).resolve()
     try:
         target.relative_to(base.resolve())
     except Exception:
-        return False, _reason("invalid_path", file=path, hint="escape detected")
+        return False, _reason("invalid_path", file=path, hint="escape detected"), None
     if not target.exists():
-        return False, _reason("missing_file", file=path)
+        return False, _reason("missing_file", file=path), None
     if target.stat().st_size > MAX_JSON_BYTES:
-        return False, _reason("file_too_large", file=path, expected=f"<= {MAX_JSON_BYTES} bytes")
+        return False, _reason("file_too_large", file=path, expected=f"<= {MAX_JSON_BYTES} bytes"), None
     schema, err = _load_schema(base, check.get("schema"), check.get("schema_path"))
     if err:
-        return False, err
+        return False, err, None
     if _schema_depth(schema) > MAX_SCHEMA_DEPTH:
-        return False, _reason("schema_too_deep", expected=f"<= {MAX_SCHEMA_DEPTH}")
+        return False, _reason("schema_too_deep", expected=f"<= {MAX_SCHEMA_DEPTH}"), None
     data = json.loads(target.read_text(encoding="utf-8", errors="replace"))
     ok, err = _validate_schema(data, schema)
-    return ok, None if ok else _reason("schema_mismatch", file=path, expected=str(schema), actual=err)
+    reason = None if ok else _reason("schema_mismatch", file=path, expected=str(schema), actual=err)
+    info = {"path": path, "schema": schema}
+    return ok, reason, info
 
 
 @register_check("http_check")
@@ -335,7 +395,7 @@ def _handle_http_check(check: dict, run_dir: Path, workspace: Path | None, log_d
     allow_hosts = set(check.get("allow_hosts", []) or [])
     allow_hosts.update({"127.0.0.1", "localhost"})
     if parsed.scheme not in ("http", "https") or parsed.hostname not in allow_hosts:
-        return False, _reason("http_not_allowed", url=url, expected=f"host in {sorted(allow_hosts)}")
+        return False, _reason("http_not_allowed", url=url, expected=f"host in {sorted(allow_hosts)}"), {"url": url}
     expected_status = int(check.get("expected_status", 200))
     timeout = int(check.get("timeout", 10))
     req = Request(url, method=check.get("method", "GET"))
@@ -344,21 +404,23 @@ def _handle_http_check(check: dict, run_dir: Path, workspace: Path | None, log_d
             status = resp.getcode()
             body = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
-        return False, _reason("http_error", url=url, actual=str(e))
+        return False, _reason("http_error", url=url, actual=str(e)), {"url": url, "status": "error"}
     if status != expected_status:
-        return False, _reason("http_status_mismatch", url=url, expected=expected_status, actual=status)
+        return False, _reason("http_status_mismatch", url=url, expected=expected_status, actual=status), {"url": url, "status": status}
     contains = check.get("contains")
     if contains and contains not in body:
-        return False, _reason("http_body_missing", url=url, expected=f"contains {contains!r}", actual=body[:200])
+        return False, _reason("http_body_missing", url=url, expected=f"contains {contains!r}", actual=body[:200]), {"url": url, "status": status}
     json_contains = check.get("json_contains")
     if json_contains is None:
-        return True, None
+        return True, None, {"url": url, "status": status}
     try:
         data = json.loads(body)
     except Exception as e:
-        return False, _reason("http_json_invalid", url=url, actual=str(e))
+        return False, _reason("http_json_invalid", url=url, actual=str(e)), {"url": url, "status": status}
     ok = _json_contains(data, json_contains)
-    return ok, None if ok else _reason("http_json_mismatch", url=url, expected=json_contains, actual=data)
+    reason = None if ok else _reason("http_json_mismatch", url=url, expected=json_contains, actual=data)
+    info = {"url": url, "status": status}
+    return ok, reason, info
 
 
 def _list_backlog_files(root: Path) -> list[Path]:
@@ -425,11 +487,12 @@ def _load_task_context(root: Path, run_dir: Path, task_id: str):
         if plan_id:
             task = _find_task_in_history(root, plan_id, task_id)
     if not task:
-        return [], None, None
+        return [], None, None, None
     checks = task.get("checks", [])
     task_workspace = None
     if isinstance(task.get("workspace"), dict):
         task_workspace = task["workspace"].get("path")
+    task_risk = task.get("risk_level", task.get("risk", task.get("high_risk")))
     retry_context = None
     if task.get("last_run") or task.get("last_reasons"):
         retry_context = _reason(
@@ -437,7 +500,7 @@ def _load_task_context(root: Path, run_dir: Path, task_id: str):
             last_run=task.get("last_run"),
             last_reasons=task.get("last_reasons"),
         )
-    return checks, task_workspace, retry_context
+    return checks, task_workspace, retry_context, task_risk
 
 
 def _load_policy_checks(run_dir: Path) -> list[dict]:
@@ -457,10 +520,7 @@ def _resolve_workspace(workspace_path: Path | None, task_workspace: str | None) 
 
 
 def _fallback_verify(run_dir: Path, retry_context: dict | None):
-    outputs_dir = run_dir / "outputs"
-    if outputs_dir.exists():
-        return True, []
-    reasons = [{"type": "unknown", "hint": "no checks provided and no outputs found"}]
+    reasons = [{"type": "no_checks", "hint": "no verification checks available"}]
     if retry_context:
         reasons.append(retry_context)
     return False, reasons
@@ -470,19 +530,31 @@ def _run_checks(effective_checks: list[dict], run_dir: Path, workspace: Path | N
     reasons = []
     passed = True
     log_dir = run_dir / "verification"
+    check_results: list[dict] = []
     for idx, check in enumerate(effective_checks):
         ctype = check.get("type")
         handler = CHECK_REGISTRY.get(ctype)
+        info = None
         if handler:
-            ok, r = handler(check, run_dir, workspace, log_dir, idx)
+            outcome = handler(check, run_dir, workspace, log_dir, idx)
+            if isinstance(outcome, tuple) and len(outcome) == 3:
+                ok, r, info = outcome
+            else:
+                ok, r = outcome
         else:
             ok, r = False, _reason("unknown_check", hint=json.dumps(check, ensure_ascii=False))
         if not ok and r:
             reasons.append(r)
             passed = False
+        record = {"index": idx, "type": ctype, "ok": ok}
+        if isinstance(info, dict):
+            record.update(info)
+        if r:
+            record["reason"] = r
+        check_results.append(record)
     if not passed and retry_context:
         reasons.append(retry_context)
-    return passed, reasons
+    return passed, reasons, check_results
 
 
 def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None):
@@ -491,16 +563,46 @@ def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None)
     è¿”å›ž (passed, reasons[])
     """
     root = Path(__file__).resolve().parent.parent
-    checks, task_workspace, retry_context = _load_task_context(root, run_dir, task_id)
-    policy_checks = [] if checks else _load_policy_checks(run_dir)
+    checks, task_workspace, retry_context, task_risk = _load_task_context(root, run_dir, task_id)
+    policy_checks = _load_policy_checks(run_dir)
     workspace = _resolve_workspace(workspace_path, task_workspace)
-    effective_checks = checks or policy_checks
+    high_risk = _is_high_risk(task_risk)
+    effective_checks = _merge_checks(checks, policy_checks, high_risk=high_risk)
+    passed = False
+    reasons: list[dict] = []
+    check_results: list[dict] = []
     if not effective_checks:
-        return _fallback_verify(run_dir, retry_context)
-    has_http_check = any(c.get("type") == "http_check" for c in effective_checks)
-    if not (workspace or has_http_check):
-        return _fallback_verify(run_dir, retry_context)
-    return _run_checks(effective_checks, run_dir, workspace, retry_context)
+        passed, reasons = _fallback_verify(run_dir, retry_context)
+    elif not _has_execution_check(effective_checks):
+        reasons = [{"type": "no_execution_checks", "hint": "no command/http checks available"}]
+        if retry_context:
+            reasons.append(retry_context)
+    else:
+        has_http_check = any(c.get("type") == "http_check" for c in effective_checks)
+        if not (workspace or has_http_check):
+            passed = False
+            reasons = [{"type": "workspace_required", "hint": "workspace path is required for non-http checks"}]
+            if retry_context:
+                reasons.append(retry_context)
+        else:
+            passed, reasons, check_results = _run_checks(effective_checks, run_dir, workspace, retry_context)
+
+    executed = [c for c in check_results if c.get("cmd")]
+    result = {
+        "status": "success" if passed else "failed",
+        "passed": passed,
+        "task_id": task_id,
+        "run_dir": str(run_dir),
+        "checks": check_results,
+        "executed_commands": executed,
+        "reasons": reasons,
+        "ts": time.time(),
+    }
+    try:
+        (run_dir / "verification_result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return passed, reasons
 
 
 class Verifier:

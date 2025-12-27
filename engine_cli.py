@@ -9,6 +9,7 @@ import sqlite3
 from pathlib import Path
 
 from config import resolve_db_path
+from infra.io_utils import read_json
 from profile_store import ensure_profile_tables
 from services.profile_service import compute_fingerprint
 from services.code_graph_service import CodeGraphService
@@ -23,10 +24,6 @@ def envelope(ok: bool, data=None, error=None):
         "data": data,
         "error": error,
     }
-
-
-def read_json(path: Path):
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _resolve_db_path(root: Path) -> Path | None:
@@ -139,7 +136,7 @@ def read_status(run_dir: Path) -> dict:
     meta = {}
     meta_path = run_dir / "meta.json"
     if meta_path.exists():
-        meta = read_json(meta_path)
+        meta = read_json(meta_path, default={})
     # latest round
     round_id = None
     reasons = []
@@ -153,7 +150,7 @@ def read_status(run_dir: Path) -> dict:
             ver_path = latest / "verification.json"
             if ver_path.exists():
                 try:
-                    ver = read_json(ver_path)
+                    ver = read_json(ver_path, default={})
                     reasons = ver.get("reasons", [])
                 except Exception:
                     reasons = []
@@ -218,7 +215,7 @@ def cmd_plan(args, root: Path):
     plan_path = exec_dir / "plan.json"
     tasks_count = 0
     if plan_path.exists():
-        plan = read_json(plan_path)
+        plan = read_json(plan_path, default={})
         tasks = plan.get("raw_plan", {}).get("tasks", [])
         tasks_count = len(tasks)
     data = {
@@ -370,7 +367,7 @@ def cmd_code_graph_build(args, root: Path):
     code_graph_service = CodeGraphService()
     workspace = Path(args.workspace)
     fingerprint = compute_fingerprint(workspace)
-    graph = code_graph_service.build(workspace, fingerprint=fingerprint)
+    graph = code_graph_service.build(workspace, fingerprint=fingerprint, watch=args.watch)
     graph_path = None
     if args.output:
         graph_path = Path(args.output)
@@ -456,6 +453,7 @@ def main():
     p_graph_build = graph_sub.add_parser("build")
     p_graph_build.add_argument("--workspace", required=True)
     p_graph_build.add_argument("--output")
+    p_graph_build.add_argument("--watch", action="store_true")
     p_graph_build.set_defaults(func=cmd_code_graph_build)
 
     p_graph_related = graph_sub.add_parser("related")

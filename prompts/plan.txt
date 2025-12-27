@@ -18,10 +18,14 @@ Constraints:
 - json_schema: {{"type":"json_schema","path":"outputs/data.json","schema":{{"type":"object","required":["ok"]}}}}
 - http_check: {{"type":"http_check","url":"http://127.0.0.1:8088/health","expected_status":200,"contains":"ok"}}
 - Titles and acceptance_criteria may use concise Chinese (推荐中文说明/注释) when free text is needed.
+- Use only commands listed in Capabilities -> commands (cmd field). Do not invent commands.
+- checks must include at least one command/command_contains/http_check entry.
 - Hard policy (must obey):
 {hard_block}
 - Soft profile (reference only, do not override hard rules):
 {soft_block}
+- Capabilities (discovered commands whitelist):
+{capabilities_block}
 
 Input task:
 {task_text}

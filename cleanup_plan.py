@@ -1,18 +1,8 @@
 import argparse
-import json
 import time
 from pathlib import Path
 
-
-def read_json(path: Path) -> dict:
-    if not path.exists():
-        return {"tasks": []}
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_json(path: Path, obj) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+from infra.io_utils import read_json, write_json
 
 
 def update_plan_status(root: Path, plan_id: str, removed: list[dict]) -> None:
@@ -34,7 +24,7 @@ def main():
     root = Path(__file__).parent
     backlog_path = root / "backlog" / f"{args.plan_id}.json"
 
-    backlog = read_json(backlog_path)
+    backlog = read_json(backlog_path, default={"tasks": []})
     tasks = backlog.get("tasks", [])
 
     keep = []

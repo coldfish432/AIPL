@@ -58,7 +58,7 @@ def is_write_allowed(rel_path: str, allow_write: list[str], deny_write: list[str
     return _is_under(rel_path, allow_write)
 
 
-def validate_checks(checks: list[dict], allowed_commands: list[str]) -> tuple[list[dict], list[dict]]:
+def validate_checks(checks: list[dict], allowed_commands: list[str], command_whitelist: list[str] | None = None) -> tuple[list[dict], list[dict]]:
     cleaned = []
     reasons: list[dict] = []
     for idx, check in enumerate(checks or []):
@@ -78,6 +78,9 @@ def validate_checks(checks: list[dict], allowed_commands: list[str]) -> tuple[li
             cmd = (check.get("cmd") or "").strip()
             if not any(cmd.startswith(p) for p in allowed_commands):
                 reasons.append({"type": "command_not_allowed", "index": idx, "cmd": cmd, "expected": allowed_commands})
+                continue
+            if command_whitelist is not None and cmd not in command_whitelist:
+                reasons.append({"type": "command_not_in_whitelist", "index": idx, "cmd": cmd})
                 continue
             cwd = check.get("cwd")
             if cwd and not is_safe_relative_path(cwd):

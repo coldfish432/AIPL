@@ -4,28 +4,13 @@ import subprocess
 import time
 from pathlib import Path
 
+from config import DEFAULT_COMMAND_TIMEOUT, DEFAULT_MAX_CONCURRENCY
 from detect_workspace import detect_workspace
+from infra.io_utils import append_jsonl, read_json, write_json
 from interfaces.protocols import ICodeGraphService, IProfileService, IVerifier
 from services.code_graph_service import CodeGraphService
 from services.profile_service import ProfileService
 from services.verifier_service import Verifier
-
-
-def read_json(path: Path):
-    if not path.exists():
-        return {"tasks": []}
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_json(path: Path, obj):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def append_jsonl(path: Path, obj):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
 def _list_backlog_files(root: Path) -> list[Path]:
@@ -38,16 +23,17 @@ def _list_backlog_files(root: Path) -> list[Path]:
 def _load_backlog_map(root: Path) -> dict[Path, list[dict]]:
     backlog_map: dict[Path, list[dict]] = {}
     for path in _list_backlog_files(root):
-        backlog_map[path] = read_json(path).get("tasks", [])
+        data = read_json(path, default={"tasks": []})
+        backlog_map[path] = (data or {}).get("tasks", [])
     return backlog_map
 
 
-def load_policy(root: Path, workspace_path: str | None, profile_service: IProfileService) -> tuple[dict, str, dict | None]:
+def load_policy(root: Path, workspace_path: str | None, profile_service: IProfileService) -> tuple[dict, str, dict | None, dict | None]:
     """
     load effective hard policy (user_hard overlay on system_hard) and optional checks.
     """
     if not workspace_path:
-        return {}, "none", None
+        return {}, "none", None, None
     workspace = Path(workspace_path)
     profile = profile_service.ensure_profile(root, workspace)
     if profile.get("created"):
@@ -55,18 +41,20 @@ def load_policy(root: Path, workspace_path: str | None, profile_service: IProfil
     elif profile.get("fingerprint_changed"):
         profile = profile_service.propose_soft(root, workspace, reason="fingerprint_changed")
     effective_hard = profile.get("effective_hard") or {}
-    checks = detect_workspace(workspace).get("checks", [])
+    workspace_info = detect_workspace(workspace)
+    checks = workspace_info.get("checks", [])
+    capabilities = workspace_info.get("capabilities", {})
     policy = {
         "allow_write": effective_hard.get("allow_write", []),
         "deny_write": effective_hard.get("deny_write", []),
         "allowed_commands": effective_hard.get("allowed_commands", []),
-        "command_timeout": effective_hard.get("command_timeout", 300),
-        "max_concurrency": effective_hard.get("max_concurrency", 1),
+        "command_timeout": effective_hard.get("command_timeout", DEFAULT_COMMAND_TIMEOUT),
+        "max_concurrency": effective_hard.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
         "checks": checks,
         "workspace_id": profile.get("workspace_id"),
         "fingerprint": profile.get("fingerprint"),
     }
-    return policy, "profile", profile
+    return policy, "profile", profile, capabilities
 
 
 def pick_next_task(tasks_with_path: list[tuple[dict, Path]], plan_filter: str | None = None):
@@ -103,10 +91,17 @@ def format_checks(checks: list[dict]) -> list[str]:
         if ctype == "command":
             timeout = c.get("timeout", "")
             lines.append(f"- command: {c.get('cmd')} timeout={timeout}")
+        elif ctype == "command_contains":
+            timeout = c.get("timeout", "")
+            lines.append(f"- command_contains: {c.get('cmd')} needle={c.get('needle')} timeout={timeout}")
         elif ctype == "file_exists":
             lines.append(f"- file_exists: {c.get('path')}")
         elif ctype == "file_contains":
             lines.append(f"- file_contains: {c.get('path')} needle={c.get('needle')}")
+        elif ctype == "json_schema":
+            lines.append(f"- json_schema: {c.get('path')}")
+        elif ctype == "http_check":
+            lines.append(f"- http_check: {c.get('url')}")
         else:
             lines.append(f"- unknown: {json.dumps(c, ensure_ascii=False)}")
     return lines
@@ -120,6 +115,7 @@ def write_verification_report(run_dir: Path, task_id: str, plan_id: str | None, 
         f"- run_dir: {run_dir}",
         f"- workspace: {workspace_path}",
         f"- passed: {passed}",
+        f"- verification_result: {run_dir / 'verification_result.json'}",
         "",
         "## Checks",
     ]
@@ -130,10 +126,16 @@ def write_verification_report(run_dir: Path, task_id: str, plan_id: str | None, 
         for c in checks:
             if c.get("type") == "command":
                 lines.append(f"- run: {c.get('cmd')}")
+            elif c.get("type") == "command_contains":
+                lines.append(f"- run: {c.get('cmd')} (expect contains {c.get('needle')})")
             elif c.get("type") == "file_exists":
                 lines.append(f"- check file exists: {c.get('path')}")
             elif c.get("type") == "file_contains":
                 lines.append(f"- check file contains: {c.get('path')} -> {c.get('needle')}")
+            elif c.get("type") == "json_schema":
+                lines.append(f"- check json schema: {c.get('path')}")
+            elif c.get("type") == "http_check":
+                lines.append(f"- http check: {c.get('url')}")
             else:
                 lines.append(f"- manual check: {json.dumps(c, ensure_ascii=False)}")
     else:
@@ -173,6 +175,31 @@ def _extract_paths_from_checks(checks: list[dict]) -> list[str]:
     return paths
 
 
+def _has_execution_check(checks: list[dict]) -> bool:
+    for check in checks or []:
+        if check.get("type") in {"command", "command_contains", "http_check"}:
+            return True
+    return False
+
+
+def _merge_checks(task_checks: list[dict], policy_checks: list[dict], high_risk: bool = False) -> list[dict]:
+    if _has_execution_check(task_checks) and not high_risk:
+        return list(task_checks or [])
+    merged = list(task_checks or [])
+    merged.extend(policy_checks or [])
+    return merged
+
+
+def _is_high_risk(value) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, (int, float)) and value >= 7:
+        return True
+    if isinstance(value, str) and value.strip().lower() in {"high", "critical"}:
+        return True
+    return False
+
+
 def _load_code_graph(root: Path, plan_id: str | None, code_graph_service: ICodeGraphService):
     if not plan_id:
         return None
@@ -210,7 +237,7 @@ class TaskController:
         root = Path(__file__).resolve().parent.parent
         if args.plan_id:
             backlog_path = root / "backlog" / f"{args.plan_id}.json"
-            backlog = read_json(backlog_path)
+            backlog = read_json(backlog_path, default={"tasks": []})
             tasks_with_path = [(t, backlog_path) for t in backlog.get("tasks", [])]
         else:
             backlog_map = _load_backlog_map(root)
@@ -227,7 +254,7 @@ class TaskController:
                     backlog_path = root / "backlog" / f"{args.plan_id}.json"
                 else:
                     backlog_path = root / "backlog" / "adhoc.json"
-                backlog = read_json(backlog_path)
+                backlog = read_json(backlog_path, default={"tasks": []})
                 backlog.setdefault("tasks", []).append(new_task)
                 write_json(backlog_path, backlog)
                 print(f"[CURRICULUM] appended {new_task['id']} -> retry pick")
@@ -258,8 +285,10 @@ class TaskController:
             workspace_path = task["workspace"]["path"]
         workspace_path = str(Path(workspace_path).resolve()) if workspace_path else None
 
-        policy, policy_source, profile = load_policy(root, workspace_path, self._profile_service)
+        policy, policy_source, profile, capabilities = load_policy(root, workspace_path, self._profile_service)
         write_json(run_dir / "policy.json", policy)
+        if capabilities:
+            write_json(run_dir / "capabilities.json", {"workspace": workspace_path, "capabilities": capabilities})
         if profile:
             print(f"[PROFILE] workspace_id={profile.get('workspace_id')} fingerprint={profile.get('fingerprint')}")
 
@@ -351,7 +380,8 @@ class TaskController:
 
         task_checks = task.get("checks", []) if isinstance(task.get("checks"), list) else []
         policy_checks = policy.get("checks", []) if isinstance(policy, dict) else []
-        effective_checks = task_checks or policy_checks
+        task_risk = task.get("risk_level", task.get("risk", task.get("high_risk")))
+        effective_checks = _merge_checks(task_checks, policy_checks, high_risk=_is_high_risk(task_risk))
         write_verification_report(run_dir, task_id, plan_id, workspace_path, passed, final_reasons, effective_checks)
 
         index_lines = [
@@ -362,6 +392,8 @@ class TaskController:
             "- meta.json",
             "- events.jsonl",
             "- policy.json",
+            "- capabilities.json",
+            "- verification_result.json",
             "- verification_report.md",
             "- outputs/",
             f"- steps/{step_id}/round-0/",
@@ -371,7 +403,7 @@ class TaskController:
 
         append_jsonl(run_dir / "events.jsonl", {"type": "run_done", "run_id": run_id, "task_id": task_id, "plan_id": plan_id, "passed": passed, "ts": time.time()})
 
-        backlog = read_json(backlog_path)
+        backlog = read_json(backlog_path, default={"tasks": []})
         for t in backlog.get("tasks", []):
             if t.get("id") == task_id:
                 t["status"] = "done" if passed else "failed"

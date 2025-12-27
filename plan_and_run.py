@@ -10,21 +10,12 @@ from state import (
     DEFAULT_STALE_SECONDS,
     scan_backlog_for_stale,
 )
+from infra.io_utils import read_json, write_json
 from services.profile_service import DEFAULT_ALLOWED_COMMANDS, compute_fingerprint
 from policy_validator import validate_checks, default_path_rules
+from detect_workspace import detect_workspace
 from services.code_graph_service import CodeGraphService
 from services.profile_service import ProfileService
-
-
-def read_json(path: Path) -> dict:
-    if not path.exists():
-        return {"tasks": []}
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_json(path: Path, obj) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _merge_tasks(tasks: list[dict]) -> list[dict]:
@@ -52,14 +43,8 @@ def _list_backlog_files(root: Path) -> list[Path]:
 def _load_backlog_map(root: Path) -> dict[Path, list[dict]]:
     backlog_map: dict[Path, list[dict]] = {}
     for path in _list_backlog_files(root):
-        if not path.exists():
-            backlog_map[path] = []
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = {"tasks": []}
-        backlog_map[path] = data.get("tasks", [])
+        data = read_json(path, default={"tasks": []})
+        backlog_map[path] = (data or {}).get("tasks", [])
     return backlog_map
 
 
@@ -177,6 +162,21 @@ def derive_checks_from_acceptance(acceptance: list[str]) -> list[dict]:
     return checks
 
 
+def _has_execution_check(checks: list[dict]) -> bool:
+    for check in checks or []:
+        if check.get("type") in {"command", "command_contains", "http_check"}:
+            return True
+    return False
+
+
+def _merge_checks(task_checks: list[dict], fallback_checks: list[dict]) -> list[dict]:
+    if _has_execution_check(task_checks):
+        return task_checks
+    merged = list(task_checks or [])
+    merged.extend(fallback_checks or [])
+    return merged
+
+
 def main():
     root = Path(__file__).parent
     backlog_dir = root / "backlog"
@@ -188,6 +188,7 @@ def main():
     parser.add_argument("--no-run", action="store_true", help="?????? backlog??????")
     parser.add_argument("--cleanup", action="store_true", help="????/???????? plan ? backlog ?????? plan ??????")
     parser.add_argument("--workspace", help="?? workspace ?????? controller")
+    parser.add_argument("--code-graph-watch", action="store_true", help="watch workspace and update code graph cache")
     parser.add_argument("--stale-seconds", type=int, default=DEFAULT_STALE_SECONDS, help="mark doing as stale after N seconds (0 to disable)")
     parser.add_argument("--stale-auto-reset", action="store_true", default=DEFAULT_STALE_AUTO_RESET, help="auto reset stale tasks to todo")
     parser.add_argument("--no-stale-auto-reset", action="store_true", help="disable auto reset even if env enables it")
@@ -208,7 +209,17 @@ def main():
     hard_block = "none"
     soft_block = "none"
     allowed_commands = list(DEFAULT_ALLOWED_COMMANDS)
+    capabilities_block = "none"
+    command_whitelist = None
+    workspace_checks: list[dict] = []
     if args.workspace:
+        workspace_info = detect_workspace(Path(args.workspace))
+        workspace_checks = workspace_info.get("checks", []) if isinstance(workspace_info, dict) else []
+        capabilities = (workspace_info or {}).get("capabilities", {}) if isinstance(workspace_info, dict) else {}
+        discovered = [c.get("cmd") for c in capabilities.get("commands", []) if isinstance(c, dict) and c.get("cmd")]
+        command_whitelist = [c for c in discovered if isinstance(c, str)]
+        if capabilities:
+            capabilities_block = json.dumps(capabilities, ensure_ascii=False, indent=2)
         profile = profile_service.ensure_profile(root, Path(args.workspace))
         if profile.get("created"):
             profile = profile_service.propose_soft(root, Path(args.workspace), reason="new_workspace")
@@ -240,6 +251,7 @@ def main():
         task_text=user_task,
         hard_block=hard_block,
         soft_block=soft_block,
+        capabilities_block=capabilities_block,
     )
 
     raw_plan = run_codex_plan(prompt.strip(), root)
@@ -247,6 +259,11 @@ def main():
 
     exec_dir = root / "artifacts" / "executions" / plan_id
     exec_dir.mkdir(parents=True, exist_ok=True)
+    if capabilities_block != "none":
+        try:
+            write_json(exec_dir / "capabilities.json", {"workspace": args.workspace, "capabilities": json.loads(capabilities_block)})
+        except Exception:
+            pass
     workspace_fingerprint = None
     code_graph_path = None
     if args.workspace:
@@ -263,7 +280,7 @@ def main():
                 needs_build = True
         if needs_build:
             try:
-                graph = code_graph_service.build(workspace_path, fingerprint=workspace_fingerprint)
+                graph = code_graph_service.build(workspace_path, fingerprint=workspace_fingerprint, watch=args.code_graph_watch)
                 code_graph_service.save(graph, graph_path)
                 print(f"[GRAPH] built code graph at {graph_path}")
             except Exception as e:
@@ -277,7 +294,8 @@ def main():
             rec = {"plan_id": plan_id, **t}
             if not isinstance(rec.get("checks"), list) or not rec.get("checks"):
                 rec["checks"] = derive_checks_from_acceptance(rec.get("acceptance_criteria", []))
-            rec["checks"], reasons = validate_checks(rec.get("checks", []), allowed_commands)
+            rec["checks"] = _merge_checks(rec.get("checks", []), workspace_checks)
+            rec["checks"], reasons = validate_checks(rec.get("checks", []), allowed_commands, command_whitelist=command_whitelist)
             if reasons:
                 rec["validation_reasons"] = reasons
                 validation_summary.append({"task_id": rec.get("id"), "reasons": reasons})
@@ -286,7 +304,7 @@ def main():
 
     existing_ids = {t["id"] for t in backlog.get("tasks", []) if t.get("id")}
     plan_backlog_path = backlog_dir / f"{plan_id}.json"
-    plan_backlog = read_json(plan_backlog_path)
+    plan_backlog = read_json(plan_backlog_path, default={"tasks": []})
     plan_tasks = plan_backlog.get("tasks", [])
     for idx, t in enumerate(plan_obj.get("tasks", []), 1):
         task_id = t.get("id") or f"{plan_id}-T{idx:02d}"
@@ -297,7 +315,8 @@ def main():
         checks = t.get("checks", []) if isinstance(t.get("checks"), list) else []
         if not checks:
             checks = derive_checks_from_acceptance(t.get("acceptance_criteria", []))
-        checks, reasons = validate_checks(checks, allowed_commands)
+        checks = _merge_checks(checks, workspace_checks)
+        checks, reasons = validate_checks(checks, allowed_commands, command_whitelist=command_whitelist)
         plan_tasks.append(
             {
                 "id": task_id,
@@ -371,7 +390,7 @@ def main():
 
         plan_file = exec_dir / "plan.json"
         if plan_file.exists():
-            plan_data = read_json(plan_file)
+            plan_data = read_json(plan_file, default={})
             plan_data["last_cleanup_ts"] = time.time()
             plan_data["cleanup_snapshot"] = removed
             write_json(plan_file, plan_data)

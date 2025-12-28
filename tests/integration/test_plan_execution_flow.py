@@ -95,6 +95,7 @@ def test_plan_execution_flow(temp_workspace, mock_http_server, profile_db):
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
     env["AIPL_DB_PATH"] = str(profile_db)
     env["CODEX_FAKE_HTTP_URL"] = mock_http_server.url
+    env["CODEX_BIN"] = str(bin_dir / ("codex.cmd" if os.name == "nt" else "codex"))
 
     try:
         subprocess.check_call(

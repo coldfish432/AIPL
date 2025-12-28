@@ -114,6 +114,7 @@ def test_verification_loop_multi_round(temp_workspace, mock_http_server, profile
     env["AIPL_DB_PATH"] = str(profile_db)
     env["CODEX_FAKE_HTTP_URL"] = mock_http_server.url
     env["CODEX_FAKE_COUNTER"] = str(bin_dir / "counter.txt")
+    env["CODEX_BIN"] = str(bin_dir / ("codex.cmd" if os.name == "nt" else "codex"))
 
     try:
         subprocess.check_call(

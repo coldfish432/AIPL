@@ -1,9 +1,11 @@
 import argparse
 import json
+import os
+import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
-import re
 
 from state import (
     DEFAULT_STALE_AUTO_RESET,
@@ -99,8 +101,15 @@ def _write_plan_snapshot(root: Path, plan_id: str, stop_reason: str) -> None:
 # 运行codex计划，执行外部命令
 def run_codex_plan(prompt: str, root_dir: Path) -> str:
     schema_path = root_dir / "schemas" / "plan.schema.json"
+    codex_bin = os.environ.get("CODEX_BIN") or shutil.which("codex")
+    if not codex_bin and os.name == "nt":
+        for cand in ("codex.cmd", "codex.exe", "codex.bat"):
+            codex_bin = shutil.which(cand)
+            if codex_bin:
+                break
+    codex_bin = codex_bin or "codex"
     cmd = [
-        "codex", "exec", "--full-auto",
+        codex_bin, "exec", "--full-auto",
         "--sandbox", "workspace-write",
         "-C", str(root_dir),
         "--skip-git-repo-check",

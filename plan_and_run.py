@@ -114,7 +114,7 @@ def run_codex_plan(prompt: str, root_dir: Path) -> str:
         text=True,
         encoding="utf-8",
         errors="replace",
-        shell=True,
+        shell=False,
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "codex failed").strip())

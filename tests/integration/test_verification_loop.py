@@ -72,6 +72,20 @@ def _write_fake_codex(bin_dir: Path) -> None:
         ),
         encoding="utf-8",
     )
+    wrapper = bin_dir / "codex"
+    wrapper.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                f"\"{os.sys.executable}\" \"{fake}\" \"$@\"",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        wrapper.chmod(0o755)
+    except Exception:
+        pass
     wrapper = bin_dir / "codex.cmd"
     wrapper.write_text(f"@echo off\r\n\"{os.sys.executable}\" \"{fake}\" %*\r\n", encoding="utf-8")
 

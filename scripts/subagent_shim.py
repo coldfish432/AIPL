@@ -1,5 +1,7 @@
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -30,8 +32,15 @@ from services.code_graph_service import CodeGraph
 def run_codex(prompt: str, root_dir: Path) -> str:
     """调用 Codex，返回符合 schema 的 JSON 字符串"""
     schema_path = root_dir / "schemas" / "codex_writes.schema.json"
+    codex_bin = os.environ.get("CODEX_BIN") or shutil.which("codex")
+    if not codex_bin and os.name == "nt":
+        for cand in ("codex.cmd", "codex.exe", "codex.bat"):
+            codex_bin = shutil.which(cand)
+            if codex_bin:
+                break
+    codex_bin = codex_bin or "codex"
     cmd = [
-        "codex", "exec",
+        codex_bin, "exec",
         "--full-auto",
         "--sandbox", "workspace-write",
         "-C", str(root_dir),
@@ -46,7 +55,7 @@ def run_codex(prompt: str, root_dir: Path) -> str:
         text=True,
         encoding="utf-8",
         errors="replace",
-        shell=True,
+        shell=False,
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "codex failed").strip())

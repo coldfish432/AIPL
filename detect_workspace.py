@@ -9,6 +9,7 @@ except Exception:  # pragma: no cover - py<3.11
 DEFAULT_DENY = [".git", "node_modules", "target", "dist", ".venv", "__pycache__", "outputs"]
 
 
+# 加载JSON，解析JSON，读取文件内容
 def _load_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -16,6 +17,7 @@ def _load_json(path: Path) -> dict:
         return {}
 
 
+# 加载toml，读取文件内容
 def _load_toml(path: Path) -> dict:
     if not tomllib:
         return {}
@@ -25,12 +27,14 @@ def _load_toml(path: Path) -> dict:
         return {}
 
 
+# 添加命令
 def _add_command(commands: list[dict], cmd: str, kind: str, source: str, timeout: int) -> None:
     if not cmd:
         return
     commands.append({"cmd": cmd, "kind": kind, "source": source, "timeout": timeout})
 
 
+# select检查项
 def _select_checks(commands: list[dict]) -> list[dict]:
     checks: list[dict] = []
     test_cmds = [c for c in commands if c.get("kind") == "test"]
@@ -47,6 +51,7 @@ def _select_checks(commands: list[dict]) -> list[dict]:
     return checks
 
 
+# 基于文件特征给出项目类型与推荐写入/测试命令
 def detect_workspace(workspace: Path) -> dict:
     """
     基于文件特征给出项目类型与推荐写入/测试命令。
@@ -60,6 +65,7 @@ def detect_workspace(workspace: Path) -> dict:
     commands: list[dict] = []
     detected: list[str] = []
 
+    # exists，检查路径是否存在
     def exists(name: str):
         return (workspace / name).exists()
 
@@ -95,7 +101,7 @@ def detect_workspace(workspace: Path) -> dict:
             detected.append("tsconfig.json")
             _add_command(commands, "npm exec -- tsc --noEmit", "typecheck", "tsconfig.json", 600)
         allow_write = ["src", "tests", "test"]
-    elif exists("pyproject.toml") or exists("requirements.txt"):
+    elif exists("pyproject.toml") or exists("requirements.txt") or exists("pytest.ini") or exists("tests"):
         project_type = "python"
         if exists("pyproject.toml"):
             detected.append("pyproject.toml")
@@ -127,6 +133,7 @@ def detect_workspace(workspace: Path) -> dict:
     }
 
 
+# 主入口，解析命令行参数，写入文件内容
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="检测 workspace 特征并输出 JSON")

@@ -18,6 +18,7 @@ from services.code_graph_service import CodeGraphService
 from services.profile_service import ProfileService
 
 
+# 合并任务
 def _merge_tasks(tasks: list[dict]) -> list[dict]:
     by_id: dict[str, dict] = {}
     for t in tasks:
@@ -33,6 +34,7 @@ def _merge_tasks(tasks: list[dict]) -> list[dict]:
     return list(by_id.values())
 
 
+# 列出待办files，检查路径是否存在
 def _list_backlog_files(root: Path) -> list[Path]:
     backlog_dir = root / "backlog"
     if not backlog_dir.exists():
@@ -40,6 +42,7 @@ def _list_backlog_files(root: Path) -> list[Path]:
     return sorted(backlog_dir.glob("*.json"))
 
 
+# 加载待办map，读取文件内容
 def _load_backlog_map(root: Path) -> dict[Path, list[dict]]:
     backlog_map: dict[Path, list[dict]] = {}
     for path in _list_backlog_files(root):
@@ -48,17 +51,20 @@ def _load_backlog_map(root: Path) -> dict[Path, list[dict]]:
     return backlog_map
 
 
+# 写入待办map，写入文件内容
 def _write_backlog_map(backlog_map: dict[Path, list[dict]]) -> None:
     for path, tasks in backlog_map.items():
         write_json(path, {"tasks": tasks})
 
 
+# 加载active待办
 def _load_active_backlog(root: Path) -> dict:
     backlog_map = _load_backlog_map(root)
     merged = _merge_tasks([t for tasks in backlog_map.values() for t in tasks])
     return {"tasks": merged}
 
 
+# split任务by计划
 def _split_tasks_by_plan(tasks: list[dict]) -> tuple[list[dict], dict[str, list[dict]]]:
     non_plan: list[dict] = []
     by_plan: dict[str, list[dict]] = {}
@@ -71,6 +77,7 @@ def _split_tasks_by_plan(tasks: list[dict]) -> tuple[list[dict], dict[str, list[
     return non_plan, by_plan
 
 
+# 写入计划snapshot，写入文件内容，创建目录
 def _write_plan_snapshot(root: Path, plan_id: str, stop_reason: str) -> None:
     backlog_map = _load_backlog_map(root)
     tasks = []
@@ -89,6 +96,7 @@ def _write_plan_snapshot(root: Path, plan_id: str, stop_reason: str) -> None:
     write_json(exec_dir / "snapshot.json", snapshot)
 
 
+# 运行codex计划，执行外部命令
 def run_codex_plan(prompt: str, root_dir: Path) -> str:
     schema_path = root_dir / "schemas" / "plan.schema.json"
     cmd = [
@@ -113,6 +121,7 @@ def run_codex_plan(prompt: str, root_dir: Path) -> str:
     return result.stdout.strip()
 
 
+# 判断是否包含todo
 def has_todo(backlog: dict, plan_id: str) -> bool:
     for t in backlog.get("tasks", []):
         if t.get("plan_id") == plan_id and t.get("status") == "todo":
@@ -120,6 +129,7 @@ def has_todo(backlog: dict, plan_id: str) -> bool:
     return False
 
 
+# 判断是否包含runnable
 def has_runnable(backlog: dict, plan_id: str) -> bool:
     tasks = backlog.get("tasks", [])
     done = {t["id"] for t in tasks if t.get("plan_id") == plan_id and t.get("status") == "done"}
@@ -133,11 +143,13 @@ def has_runnable(backlog: dict, plan_id: str) -> bool:
     return False
 
 
+# extract输出路径
 def _extract_outputs_path(text: str) -> list[str]:
     matches = re.findall(r"(?:run_dir/)?outputs/([A-Za-z0-9_./-]+)", text)
     return [f"outputs/{m}" for m in matches]
 
 
+# extractneedle
 def _extract_needle(text: str) -> str | None:
     for kw in ("contains", "含有", "包含"):
         if kw in text:
@@ -150,6 +162,7 @@ def _extract_needle(text: str) -> str | None:
     return None
 
 
+# derive检查项fromacceptance
 def derive_checks_from_acceptance(acceptance: list[str]) -> list[dict]:
     checks: list[dict] = []
     for line in acceptance or []:
@@ -162,6 +175,7 @@ def derive_checks_from_acceptance(acceptance: list[str]) -> list[dict]:
     return checks
 
 
+# 判断是否包含execution检查
 def _has_execution_check(checks: list[dict]) -> bool:
     for check in checks or []:
         if check.get("type") in {"command", "command_contains", "http_check"}:
@@ -169,6 +183,7 @@ def _has_execution_check(checks: list[dict]) -> bool:
     return False
 
 
+# 合并检查项
 def _merge_checks(task_checks: list[dict], fallback_checks: list[dict]) -> list[dict]:
     if _has_execution_check(task_checks):
         return task_checks
@@ -177,11 +192,10 @@ def _merge_checks(task_checks: list[dict], fallback_checks: list[dict]) -> list[
     return merged
 
 
+# 主入口，解析命令行参数，读取文件内容
 def main():
-    root = Path(__file__).parent
-    backlog_dir = root / "backlog"
-
     parser = argparse.ArgumentParser(description="????????? Codex ?????")
+    parser.add_argument("--root", required=True, help="repo root path")
     parser.add_argument("--task", required=True, help="?????????")
     parser.add_argument("--plan-id", help="?? plan_id???????")
     parser.add_argument("--max-tasks", type=int, default=8, help="??????????????????")
@@ -193,8 +207,10 @@ def main():
     parser.add_argument("--stale-auto-reset", action="store_true", default=DEFAULT_STALE_AUTO_RESET, help="auto reset stale tasks to todo")
     parser.add_argument("--no-stale-auto-reset", action="store_true", help="disable auto reset even if env enables it")
     args = parser.parse_args()
+    root = Path(args.root).resolve()
+    backlog_dir = root / "backlog"
     profile_service = ProfileService()
-    code_graph_service = CodeGraphService()
+    code_graph_service = CodeGraphService(cache_root=root)
 
     plan_id = args.plan_id or time.strftime("plan-%Y%m%d-%H%M%S")
     user_task = args.task.strip()
@@ -369,7 +385,7 @@ def main():
             stop_reason = "no_runnable"
             break
         print(f"[RUN] invoking controller for plan_id={plan_id}")
-        cmd = ["python", "-m", "services.controller_service", "--plan-id", plan_id]
+        cmd = ["python", "-m", "services.controller_service", "--root", str(root), "--plan-id", plan_id]
         if args.workspace:
             cmd.extend(["--workspace", args.workspace])
         subprocess.check_call(cmd, cwd=root)

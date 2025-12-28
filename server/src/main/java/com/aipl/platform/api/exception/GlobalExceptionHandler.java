@@ -1,7 +1,6 @@
 package com.aipl.platform.api.exception;
 
 import com.aipl.platform.api.dto.response.ApiResponse;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 

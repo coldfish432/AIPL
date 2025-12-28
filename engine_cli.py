@@ -16,6 +16,7 @@ from services.code_graph_service import CodeGraphService
 from services.profile_service import ProfileService
 
 
+# envelope
 def envelope(ok: bool, data=None, error=None):
     return {
         "ok": ok,
@@ -26,10 +27,12 @@ def envelope(ok: bool, data=None, error=None):
     }
 
 
+# 解析db路径
 def _resolve_db_path(root: Path) -> Path | None:
     return resolve_db_path(root)
 
 
+# 确保sqliteSchema
 def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, plan_id TEXT, status TEXT, updated_at INTEGER, raw_json TEXT)")
     conn.execute("CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, updated_at INTEGER, raw_json TEXT)")
@@ -37,6 +40,7 @@ def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
     ensure_profile_tables(conn)
 
 
+# mirror计划tosqlite，序列化JSON，创建目录
 def _mirror_plan_to_sqlite(res: dict, root: Path) -> None:
     data = res.get("data") if isinstance(res, dict) else None
     if not isinstance(data, dict):
@@ -63,6 +67,7 @@ def _mirror_plan_to_sqlite(res: dict, root: Path) -> None:
         return
 
 
+# mirror运行tosqlite，序列化JSON，创建目录
 def _mirror_run_to_sqlite(res: dict, root: Path) -> None:
     data = res.get("data") if isinstance(res, dict) else None
     if not isinstance(data, dict):
@@ -91,6 +96,7 @@ def _mirror_run_to_sqlite(res: dict, root: Path) -> None:
         return
 
 
+# 查找latest运行，检查路径是否存在
 def find_latest_run(exec_dir: Path) -> Path | None:
     runs_dir = exec_dir / "runs"
     if not runs_dir.exists():
@@ -102,6 +108,7 @@ def find_latest_run(exec_dir: Path) -> Path | None:
     return runs[0]
 
 
+# 解析运行dir，检查路径是否存在
 def resolve_run_dir(root: Path, plan_id: str | None, run_id: str | None) -> Path | None:
     if plan_id:
         exec_dir = root / "artifacts" / "executions" / plan_id
@@ -116,6 +123,7 @@ def resolve_run_dir(root: Path, plan_id: str | None, run_id: str | None) -> Path
     return None
 
 
+# 读取status，检查路径是否存在，读取文件内容
 def read_status(run_dir: Path) -> dict:
     events_path = run_dir / "events.jsonl"
     status = "running"
@@ -167,6 +175,7 @@ def read_status(run_dir: Path) -> dict:
 
 
 
+# 列出runs，检查路径是否存在
 def list_runs(exec_dir: Path) -> list[dict]:
     runs_dir = exec_dir / "runs"
     if not runs_dir.exists():
@@ -185,6 +194,7 @@ def list_runs(exec_dir: Path) -> list[dict]:
     return runs
 
 
+# 列出artifacts，读取文件
 def list_artifacts(run_dir: Path) -> list[dict]:
     items = []
     for root, _, files in os.walk(run_dir):
@@ -205,9 +215,10 @@ def list_artifacts(run_dir: Path) -> list[dict]:
     return items
 
 
+# cmd计划，执行外部命令，检查路径是否存在
 def cmd_plan(args, root: Path):
     plan_id = args.plan_id or time.strftime("plan-%Y%m%d-%H%M%S")
-    cmd = ["python", "plan_and_run.py", "--task", args.task, "--plan-id", plan_id, "--no-run"]
+    cmd = ["python", "plan_and_run.py", "--root", str(root), "--task", args.task, "--plan-id", plan_id, "--no-run"]
     if args.workspace:
         cmd.extend(["--workspace", args.workspace])
     subprocess.check_call(cmd, cwd=root)
@@ -229,9 +240,10 @@ def cmd_plan(args, root: Path):
     print(json.dumps(res, ensure_ascii=False))
 
 
+# cmd运行，执行外部命令，序列化JSON
 def cmd_run(args, root: Path):
     plan_id = args.plan_id or time.strftime("plan-%Y%m%d-%H%M%S")
-    cmd = ["python", "plan_and_run.py", "--task", args.task, "--plan-id", plan_id]
+    cmd = ["python", "plan_and_run.py", "--root", str(root), "--task", args.task, "--plan-id", plan_id]
     if args.workspace:
         cmd.extend(["--workspace", args.workspace])
     subprocess.check_call(cmd, cwd=root)
@@ -248,6 +260,7 @@ def cmd_run(args, root: Path):
     print(json.dumps(res, ensure_ascii=False))
 
 
+# cmdstatus，序列化JSON
 def cmd_status(args, root: Path):
     run_dir = resolve_run_dir(root, args.plan_id, args.run_id)
     if not run_dir:
@@ -258,6 +271,7 @@ def cmd_status(args, root: Path):
     print(json.dumps(res, ensure_ascii=False))
 
 
+# cmdevents，解析JSON，序列化JSON
 def cmd_events(args, root: Path):
     run_dir = resolve_run_dir(root, args.plan_id, args.run_id)
     if not run_dir:
@@ -288,6 +302,7 @@ def cmd_events(args, root: Path):
     print(json.dumps(envelope(True, data=data), ensure_ascii=False))
 
 
+# cmdartifacts，序列化JSON
 def cmd_artifacts(args, root: Path):
     run_dir = resolve_run_dir(root, args.plan_id, args.run_id)
     if not run_dir and not args.plan_id:
@@ -313,6 +328,7 @@ def cmd_artifacts(args, root: Path):
 
 
 
+# cmdcancel，写入文件内容，序列化JSON
 def cmd_cancel(args, root: Path):
     run_dir = resolve_run_dir(root, args.plan_id, args.run_id)
     if not run_dir:
@@ -326,6 +342,7 @@ def cmd_cancel(args, root: Path):
     print(json.dumps(res, ensure_ascii=False))
 
 
+# cmd档案，序列化JSON
 def cmd_profile(args, root: Path):
     profile_service = ProfileService()
     if not args.workspace:
@@ -363,8 +380,9 @@ def cmd_profile(args, root: Path):
     print(json.dumps(res, ensure_ascii=False))
 
 
+# cmd代码图构建，序列化JSON
 def cmd_code_graph_build(args, root: Path):
-    code_graph_service = CodeGraphService()
+    code_graph_service = CodeGraphService(cache_root=root)
     workspace = Path(args.workspace)
     fingerprint = compute_fingerprint(workspace)
     graph = code_graph_service.build(workspace, fingerprint=fingerprint, watch=args.watch)
@@ -381,8 +399,9 @@ def cmd_code_graph_build(args, root: Path):
     print(json.dumps(envelope(True, data=data), ensure_ascii=False))
 
 
+# cmd代码图related，序列化JSON，检查路径是否存在
 def cmd_code_graph_related(args, root: Path):
-    code_graph_service = CodeGraphService()
+    code_graph_service = CodeGraphService(cache_root=root)
     workspace = Path(args.workspace)
     graph = None
     if args.graph:
@@ -403,9 +422,10 @@ def cmd_code_graph_related(args, root: Path):
     print(json.dumps(envelope(True, data=data), ensure_ascii=False))
 
 
+# 主入口，解析命令行参数
 def main():
-    root = Path(__file__).parent
     parser = argparse.ArgumentParser(description="AIPL Engine CLI")
+    parser.add_argument("--root", required=True, help="repo root path")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_plan = sub.add_parser("plan")
@@ -464,6 +484,7 @@ def main():
     p_graph_related.set_defaults(func=cmd_code_graph_related)
 
     args = parser.parse_args()
+    root = Path(args.root).resolve()
     args.func(args, root)
 
 

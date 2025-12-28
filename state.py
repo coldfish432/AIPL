@@ -26,6 +26,7 @@ TRANSITIONS: dict[str | None, set[str]] = {
 }
 
 
+# 判断是否validtransition
 def is_valid_transition(from_status: str | None, to_status: str) -> bool:
     if to_status not in ACTIVE_STATUSES and to_status not in TERMINAL_STATUSES:
         return False
@@ -33,6 +34,7 @@ def is_valid_transition(from_status: str | None, to_status: str) -> bool:
     return to_status in allowed
 
 
+# 构建transition事件
 def build_transition_event(
     task: dict,
     from_status: str | None,
@@ -56,6 +58,7 @@ def build_transition_event(
     return event
 
 
+# transition任务
 def transition_task(
     task: dict,
     to_status: str,
@@ -79,14 +82,17 @@ def transition_task(
     return build_transition_event(task, from_status, to_status, now, source=source, reason=reason)
 
 
+# touchheartbeat
 def touch_heartbeat(task: dict, now: float | None = None) -> None:
     task["heartbeat_ts"] = now or time.time()
 
 
+# 状态events路径
 def state_events_path(root: Path) -> Path:
     return root / "artifacts" / "state" / "events.jsonl"
 
 
+# 追加状态events，创建目录，读取文件
 def append_state_events(root: Path, events: list[dict]) -> None:
     if not events:
         return
@@ -97,6 +103,7 @@ def append_state_events(root: Path, events: list[dict]) -> None:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+# stalereferencets
 def _stale_reference_ts(task: dict) -> float | None:
     for key in ("heartbeat_ts", "status_ts", "created_ts"):
         ts = task.get(key)
@@ -105,6 +112,7 @@ def _stale_reference_ts(task: dict) -> float | None:
     return None
 
 
+# scan待办forstale
 def scan_backlog_for_stale(
     backlog_map: dict[Path, list[dict]],
     stale_after_seconds: int,

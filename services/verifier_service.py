@@ -18,13 +18,16 @@ MAX_SCHEMA_ITEMS = 100
 CHECK_REGISTRY: dict[str, callable] = {}
 
 
+# 注册检查
 def register_check(name: str):
+    # decorator
     def decorator(fn):
         CHECK_REGISTRY[name] = fn
         return fn
     return decorator
 
 
+# 原因
 def _reason(mtype: str, **kwargs):
     r = {"type": mtype}
     for k, v in kwargs.items():
@@ -33,6 +36,76 @@ def _reason(mtype: str, **kwargs):
     return r
 
 
+# tail
+def _tail(text: str, max_len: int = 500) -> str:
+    if not text:
+        return ""
+    return text[-max_len:]
+
+
+# coercetext
+def _coerce_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+class CommandRunner:
+    # 运行
+    def run(self, cmd: str, cwd: Path, timeout: int) -> dict:
+        raise NotImplementedError
+
+
+class SubprocessRunner(CommandRunner):
+    # 运行，执行外部命令
+    def run(self, cmd: str, cwd: Path, timeout: int) -> dict:
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                shell=True,
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except subprocess.TimeoutExpired as e:
+            return {
+                "executed": True,
+                "timed_out": True,
+                "returncode": None,
+                "stdout": _coerce_text(getattr(e, "stdout", "")),
+                "stderr": _coerce_text(getattr(e, "stderr", "")),
+                "timeout_error": _coerce_text(e),
+            }
+        return {
+            "executed": True,
+            "timed_out": False,
+            "returncode": result.returncode,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+        }
+
+
+_DEFAULT_COMMAND_RUNNER = SubprocessRunner()
+_COMMAND_RUNNER: CommandRunner | None = None
+
+
+# 设置命令runner
+def set_command_runner(runner: CommandRunner | None) -> None:
+    global _COMMAND_RUNNER
+    _COMMAND_RUNNER = runner
+
+
+# 获取命令runner
+def _get_command_runner() -> CommandRunner:
+    return _COMMAND_RUNNER or _DEFAULT_COMMAND_RUNNER
+
+
+# 运行命令，写入文件内容，创建目录
 def _run_command(cmd: str, cwd: Path, timeout: int, log_dir: Path, idx: int, expect_exit_code: int):
     log_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = log_dir / f"cmd-{idx}.stdout.txt"
@@ -52,33 +125,42 @@ def _run_command(cmd: str, cwd: Path, timeout: int, log_dir: Path, idx: int, exp
         "stdout_log": stdout_rel,
         "stderr_log": stderr_rel,
     }
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            shell=True,
-            timeout=timeout,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except subprocess.TimeoutExpired as e:
-        timeout_path.write_text(str(e), encoding="utf-8")
+    runner = _get_command_runner()
+    result = runner.run(cmd, cwd, timeout)
+    executed = bool(result.get("executed", True))
+    timed_out = bool(result.get("timed_out", False))
+    stdout = _coerce_text(result.get("stdout"))
+    stderr = _coerce_text(result.get("stderr"))
+    evidence = {"stdout_tail": _tail(stdout), "stderr_tail": _tail(stderr)}
+    info.update(
+        {
+            "executed": executed,
+            "timed_out": timed_out,
+            "exit_code": result.get("returncode"),
+            "evidence": evidence,
+        }
+    )
+    if not executed:
+        info.update({"status": "skipped"})
+        return False, _reason("command_not_executed", cmd=cmd, hint="runner skipped execution"), info
+    if timed_out:
+        timeout_msg = _coerce_text(result.get("timeout_error")) or f"timeout after {timeout}s"
+        timeout_path.write_text(timeout_msg, encoding="utf-8")
         info.update({"status": "timeout", "timeout": timeout, "timeout_log": timeout_rel})
-        return False, _reason("command_timeout", cmd=cmd, expected=f"<= {timeout}s", actual=str(e), hint=f"log: {timeout_rel}"), info
+        return False, _reason("command_timeout", cmd=cmd, expected=f"<= {timeout}s", actual=timeout_msg, hint=f"log: {timeout_rel}"), info
 
-    stdout_path.write_text(result.stdout or "", encoding="utf-8")
-    stderr_path.write_text(result.stderr or "", encoding="utf-8")
-    info.update({"returncode": result.returncode})
-    if result.returncode != expect_exit_code:
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
+    returncode = result.get("returncode")
+    if returncode != expect_exit_code:
         hint = f"log: {stdout_rel} / {stderr_rel}"
         info["status"] = "failed"
-        return False, _reason("command_failed", cmd=cmd, expected=f"exit code {expect_exit_code}", actual=f"exit code {result.returncode}", hint=hint), info
+        return False, _reason("command_failed", cmd=cmd, expected=f"exit code {expect_exit_code}", actual=f"exit code {returncode}", hint=hint), info
     info["status"] = "ok"
     return True, None, info
 
 
+# 检查文件exists，检查路径是否存在
 def _check_file_exists(base: Path, path: str):
     target = (base / path).resolve()
     try:
@@ -90,6 +172,7 @@ def _check_file_exists(base: Path, path: str):
     return True, None
 
 
+# 检查文件contains，读取文件内容
 def _check_file_contains(base: Path, path: str, needle: str):
     ok, reason = _check_file_exists(base, path)
     if not ok:
@@ -101,6 +184,7 @@ def _check_file_contains(base: Path, path: str, needle: str):
     return True, None
 
 
+# selectbase路径
 def _select_base_path(run_dir: Path, workspace: Path | None, path: str) -> Path | None:
     norm = path.replace("\\", "/")
     if norm == "outputs" or norm.startswith("outputs/"):
@@ -108,6 +192,7 @@ def _select_base_path(run_dir: Path, workspace: Path | None, path: str) -> Path 
     return workspace
 
 
+# 解析cwd
 def _resolve_cwd(base: Path, cwd: str | None):
     if not cwd:
         return base
@@ -119,6 +204,7 @@ def _resolve_cwd(base: Path, cwd: str | None):
     return target
 
 
+# 规范化prefixes
 def _normalize_prefixes(prefixes) -> tuple[str, ...]:
     if isinstance(prefixes, str):
         return (prefixes,)
@@ -127,11 +213,17 @@ def _normalize_prefixes(prefixes) -> tuple[str, ...]:
     return ()
 
 
+# 判断是否命令allowed
 def _is_command_allowed(cmd: str, allow_prefixes: tuple[str, ...]):
     cmd = cmd.strip()
+    if not cmd:
+        return False
+    if any(token in cmd for token in (";", "&&", "||", "|", "`", "$(", "\n", "\r")):
+        return False
     return cmd.startswith(allow_prefixes)
 
 
+# 判断是否包含execution检查
 def _has_execution_check(checks: list[dict]) -> bool:
     for check in checks or []:
         if check.get("type") in {"command", "command_contains", "http_check"}:
@@ -139,6 +231,7 @@ def _has_execution_check(checks: list[dict]) -> bool:
     return False
 
 
+# 合并检查项
 def _merge_checks(task_checks: list[dict], policy_checks: list[dict], high_risk: bool = False) -> list[dict]:
     if _has_execution_check(task_checks) and not high_risk:
         return list(task_checks or [])
@@ -147,6 +240,7 @@ def _merge_checks(task_checks: list[dict], policy_checks: list[dict], high_risk:
     return merged
 
 
+# 判断是否高风险
 def _is_high_risk(value) -> bool:
     if value is True:
         return True
@@ -157,6 +251,7 @@ def _is_high_risk(value) -> bool:
     return False
 
 
+# JSONcontainsdict
 def _json_contains_dict(actual, expected: dict) -> bool:
     if not isinstance(actual, dict):
         return False
@@ -166,6 +261,7 @@ def _json_contains_dict(actual, expected: dict) -> bool:
     return True
 
 
+# JSONcontains列出
 def _json_contains_list(actual, expected: list) -> bool:
     if not isinstance(actual, list):
         return False
@@ -183,6 +279,7 @@ _JSON_CONTAINS_HANDLERS = {
 }
 
 
+# JSONcontains
 def _json_contains(actual, expected) -> bool:
     handler = _JSON_CONTAINS_HANDLERS.get(type(expected))
     if handler:
@@ -190,6 +287,7 @@ def _json_contains(actual, expected) -> bool:
     return actual == expected
 
 
+# Schemadepth
 def _schema_depth(schema, depth=0) -> int:
     if depth > MAX_SCHEMA_DEPTH:
         return depth
@@ -200,6 +298,7 @@ def _schema_depth(schema, depth=0) -> int:
     return depth
 
 
+# 校验objectSchema
 def _validate_object_schema(data, schema) -> tuple[bool, str | None]:
     if not isinstance(data, dict):
         return False, "expected object"
@@ -216,6 +315,7 @@ def _validate_object_schema(data, schema) -> tuple[bool, str | None]:
     return True, None
 
 
+# 校验arraySchema
 def _validate_array_schema(data, schema) -> tuple[bool, str | None]:
     if not isinstance(data, list):
         return False, "expected array"
@@ -228,22 +328,27 @@ def _validate_array_schema(data, schema) -> tuple[bool, str | None]:
     return True, None
 
 
+# 校验stringSchema
 def _validate_string_schema(data, schema) -> tuple[bool, str | None]:
     return (True, None) if isinstance(data, str) else (False, "expected string")
 
 
+# 校验integerSchema
 def _validate_integer_schema(data, schema) -> tuple[bool, str | None]:
     return (True, None) if (isinstance(data, int) and not isinstance(data, bool)) else (False, "expected integer")
 
 
+# 校验numberSchema
 def _validate_number_schema(data, schema) -> tuple[bool, str | None]:
     return (True, None) if (isinstance(data, (int, float)) and not isinstance(data, bool)) else (False, "expected number")
 
 
+# 校验booleanSchema
 def _validate_boolean_schema(data, schema) -> tuple[bool, str | None]:
     return (True, None) if isinstance(data, bool) else (False, "expected boolean")
 
 
+# 校验nullSchema
 def _validate_null_schema(data, schema) -> tuple[bool, str | None]:
     return (True, None) if data is None else (False, "expected null")
 
@@ -259,6 +364,7 @@ _SCHEMA_VALIDATORS = {
 }
 
 
+# 校验Schema
 def _validate_schema(data, schema) -> tuple[bool, str | None]:
     stype = schema.get("type")
     validator = _SCHEMA_VALIDATORS.get(stype)
@@ -270,12 +376,14 @@ def _validate_schema(data, schema) -> tuple[bool, str | None]:
     return True, None
 
 
+# 确保工作区
 def _ensure_workspace(check_type: str, workspace: Path | None):
     if workspace:
         return True, None
     return False, _reason("workspace_required", check_type=check_type, hint="workspace path is required for this check")
 
 
+# handle文件exists
 @register_check("file_exists")
 def _handle_file_exists(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     path = check.get("path", "")
@@ -287,6 +395,7 @@ def _handle_file_exists(check: dict, run_dir: Path, workspace: Path | None, log_
     return ok, reason, info
 
 
+# handle文件contains
 @register_check("file_contains")
 def _handle_file_contains(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     path = check.get("path", "")
@@ -298,6 +407,7 @@ def _handle_file_contains(check: dict, run_dir: Path, workspace: Path | None, lo
     return ok, reason, info
 
 
+# handle命令
 @register_check("command")
 def _handle_command(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     ok, r = _ensure_workspace("command", workspace)
@@ -306,16 +416,19 @@ def _handle_command(check: dict, run_dir: Path, workspace: Path | None, log_dir:
     cmd = check.get("cmd", "")
     allow_prefixes = _normalize_prefixes(check.get("allow_prefixes")) or ALLOWED_COMMAND_PREFIXES
     if not _is_command_allowed(cmd, allow_prefixes):
-        return False, _reason("command_not_allowed", cmd=cmd, expected=f"prefix in {allow_prefixes}"), {"cmd": cmd, "status": "skipped"}
+        info = {"cmd": cmd, "status": "skipped", "executed": False, "timed_out": False, "exit_code": None, "evidence": {"stdout_tail": "", "stderr_tail": ""}}
+        return False, _reason("command_not_allowed", cmd=cmd, expected=f"prefix in {allow_prefixes}"), info
     timeout = int(check.get("timeout", 300))
     expect_exit_code = int(check.get("expect_exit_code", 0))
     cwd = _resolve_cwd(workspace, check.get("cwd"))
     if not cwd:
-        return False, _reason("invalid_cwd", cwd=check.get("cwd")), {"cmd": cmd, "status": "invalid_cwd"}
+        info = {"cmd": cmd, "status": "invalid_cwd", "executed": False, "timed_out": False, "exit_code": None, "evidence": {"stdout_tail": "", "stderr_tail": ""}}
+        return False, _reason("invalid_cwd", cwd=check.get("cwd")), info
     ok, r, info = _run_command(cmd, cwd, timeout, log_dir, idx, expect_exit_code)
     return ok, r, info
 
 
+# handle命令contains，读取文件内容，检查路径是否存在
 @register_check("command_contains")
 def _handle_command_contains(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     ok, r = _ensure_workspace("command_contains", workspace)
@@ -325,12 +438,14 @@ def _handle_command_contains(check: dict, run_dir: Path, workspace: Path | None,
     needle = check.get("needle", "")
     allow_prefixes = _normalize_prefixes(check.get("allow_prefixes")) or ALLOWED_COMMAND_PREFIXES
     if not _is_command_allowed(cmd, allow_prefixes):
-        return False, _reason("command_not_allowed", cmd=cmd, expected=f"prefix in {allow_prefixes}"), {"cmd": cmd, "status": "skipped"}
+        info = {"cmd": cmd, "status": "skipped", "executed": False, "timed_out": False, "exit_code": None, "evidence": {"stdout_tail": "", "stderr_tail": ""}}
+        return False, _reason("command_not_allowed", cmd=cmd, expected=f"prefix in {allow_prefixes}"), info
     timeout = int(check.get("timeout", 300))
     expect_exit_code = int(check.get("expect_exit_code", 0))
     cwd = _resolve_cwd(workspace, check.get("cwd"))
     if not cwd:
-        return False, _reason("invalid_cwd", cwd=check.get("cwd")), {"cmd": cmd, "status": "invalid_cwd"}
+        info = {"cmd": cmd, "status": "invalid_cwd", "executed": False, "timed_out": False, "exit_code": None, "evidence": {"stdout_tail": "", "stderr_tail": ""}}
+        return False, _reason("invalid_cwd", cwd=check.get("cwd")), info
     ok, r, info = _run_command(cmd, cwd, timeout, log_dir, idx, expect_exit_code)
     if not ok:
         return ok, r, info
@@ -346,6 +461,7 @@ def _handle_command_contains(check: dict, run_dir: Path, workspace: Path | None,
     return True, None, info
 
 
+# 加载Schema，解析JSON，检查路径是否存在
 def _load_schema(base: Path, schema, schema_path: str | None):
     if schema is not None:
         return schema, None
@@ -361,6 +477,7 @@ def _load_schema(base: Path, schema, schema_path: str | None):
     return json.loads(schema_target.read_text(encoding="utf-8", errors="replace")), None
 
 
+# handleJSONSchema，解析JSON，读取文件内容
 @register_check("json_schema")
 def _handle_json_schema(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     path = check.get("path", "")
@@ -388,6 +505,7 @@ def _handle_json_schema(check: dict, run_dir: Path, workspace: Path | None, log_
     return ok, reason, info
 
 
+# handleHTTP检查，解析JSON
 @register_check("http_check")
 def _handle_http_check(check: dict, run_dir: Path, workspace: Path | None, log_dir: Path, idx: int):
     url = check.get("url", "")
@@ -395,7 +513,7 @@ def _handle_http_check(check: dict, run_dir: Path, workspace: Path | None, log_d
     allow_hosts = set(check.get("allow_hosts", []) or [])
     allow_hosts.update({"127.0.0.1", "localhost"})
     if parsed.scheme not in ("http", "https") or parsed.hostname not in allow_hosts:
-        return False, _reason("http_not_allowed", url=url, expected=f"host in {sorted(allow_hosts)}"), {"url": url}
+        return False, _reason("http_not_allowed", url=url, expected=f"host in {sorted(allow_hosts)}"), {"url": url, "executed": False}
     expected_status = int(check.get("expected_status", 200))
     timeout = int(check.get("timeout", 10))
     req = Request(url, method=check.get("method", "GET"))
@@ -404,25 +522,26 @@ def _handle_http_check(check: dict, run_dir: Path, workspace: Path | None, log_d
             status = resp.getcode()
             body = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
-        return False, _reason("http_error", url=url, actual=str(e)), {"url": url, "status": "error"}
+        return False, _reason("http_error", url=url, actual=str(e)), {"url": url, "status": "error", "executed": True}
     if status != expected_status:
-        return False, _reason("http_status_mismatch", url=url, expected=expected_status, actual=status), {"url": url, "status": status}
+        return False, _reason("http_status_mismatch", url=url, expected=expected_status, actual=status), {"url": url, "status": status, "executed": True}
     contains = check.get("contains")
     if contains and contains not in body:
-        return False, _reason("http_body_missing", url=url, expected=f"contains {contains!r}", actual=body[:200]), {"url": url, "status": status}
+        return False, _reason("http_body_missing", url=url, expected=f"contains {contains!r}", actual=body[:200]), {"url": url, "status": status, "executed": True}
     json_contains = check.get("json_contains")
     if json_contains is None:
-        return True, None, {"url": url, "status": status}
+        return True, None, {"url": url, "status": status, "executed": True}
     try:
         data = json.loads(body)
     except Exception as e:
-        return False, _reason("http_json_invalid", url=url, actual=str(e)), {"url": url, "status": status}
+        return False, _reason("http_json_invalid", url=url, actual=str(e)), {"url": url, "status": status, "executed": True}
     ok = _json_contains(data, json_contains)
     reason = None if ok else _reason("http_json_mismatch", url=url, expected=json_contains, actual=data)
-    info = {"url": url, "status": status}
+    info = {"url": url, "status": status, "executed": True}
     return ok, reason, info
 
 
+# 列出待办files，检查路径是否存在
 def _list_backlog_files(root: Path) -> list[Path]:
     backlog_dir = root / "backlog"
     if not backlog_dir.exists():
@@ -430,6 +549,7 @@ def _list_backlog_files(root: Path) -> list[Path]:
     return sorted(backlog_dir.glob("*.json"))
 
 
+# 查找任务in待办，解析JSON，检查路径是否存在
 def _find_task_in_backlog(root: Path, task_id: str) -> dict | None:
     for path in _list_backlog_files(root):
         if not path.exists():
@@ -446,6 +566,7 @@ def _find_task_in_backlog(root: Path, task_id: str) -> dict | None:
     return None
 
 
+# infer计划ID
 def _infer_plan_id(root: Path, run_dir: Path) -> str | None:
     exec_root = root / "artifacts" / "executions"
     try:
@@ -458,6 +579,7 @@ def _infer_plan_id(root: Path, run_dir: Path) -> str | None:
     return parts[0]
 
 
+# 查找任务inhistory，检查路径是否存在，读取文件
 def _find_task_in_history(root: Path, plan_id: str, task_id: str) -> dict | None:
     history_path = root / "artifacts" / "executions" / plan_id / "history.jsonl"
     if not history_path.exists():
@@ -480,6 +602,7 @@ def _find_task_in_history(root: Path, plan_id: str, task_id: str) -> dict | None
     return found
 
 
+# 加载任务context
 def _load_task_context(root: Path, run_dir: Path, task_id: str):
     task = _find_task_in_backlog(root, task_id)
     if not task:
@@ -503,6 +626,7 @@ def _load_task_context(root: Path, run_dir: Path, task_id: str):
     return checks, task_workspace, retry_context, task_risk
 
 
+# 加载策略检查项，解析JSON，检查路径是否存在
 def _load_policy_checks(run_dir: Path) -> list[dict]:
     policy_path = run_dir / "policy.json"
     if not policy_path.exists():
@@ -514,11 +638,13 @@ def _load_policy_checks(run_dir: Path) -> list[dict]:
         return []
 
 
+# 解析工作区
 def _resolve_workspace(workspace_path: Path | None, task_workspace: str | None) -> Path | None:
     workspace = workspace_path or (Path(task_workspace) if task_workspace else None)
     return workspace.resolve() if workspace else None
 
 
+# fallback验证
 def _fallback_verify(run_dir: Path, retry_context: dict | None):
     reasons = [{"type": "no_checks", "hint": "no verification checks available"}]
     if retry_context:
@@ -526,6 +652,7 @@ def _fallback_verify(run_dir: Path, retry_context: dict | None):
     return False, reasons
 
 
+# 运行检查项，序列化JSON
 def _run_checks(effective_checks: list[dict], run_dir: Path, workspace: Path | None, retry_context: dict | None):
     reasons = []
     passed = True
@@ -557,12 +684,12 @@ def _run_checks(effective_checks: list[dict], run_dir: Path, workspace: Path | N
     return passed, reasons, check_results
 
 
-def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None):
+# 用途: ä¼˜å…ˆæ‰§è¡Œ checksï¼ˆä»»åŠ¡å®šä¹?> policyï¼‰ã€‚
+def verify_task(root: Path, run_dir: Path, task_id: str, workspace_path: Path | None = None):
     """
     ä¼˜å…ˆæ‰§è¡Œ checksï¼ˆä»»åŠ¡å®šä¹?> policyï¼‰ã€‚
     è¿”å›ž (passed, reasons[])
     """
-    root = Path(__file__).resolve().parent.parent
     checks, task_workspace, retry_context, task_risk = _load_task_context(root, run_dir, task_id)
     policy_checks = _load_policy_checks(run_dir)
     workspace = _resolve_workspace(workspace_path, task_workspace)
@@ -587,7 +714,11 @@ def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None)
         else:
             passed, reasons, check_results = _run_checks(effective_checks, run_dir, workspace, retry_context)
 
-    executed = [c for c in check_results if c.get("cmd")]
+    executed_any = any(c.get("executed") for c in check_results)
+    if passed and not executed_any:
+        passed = False
+        reasons.append(_reason("no_commands_executed", hint="no executed checks available"))
+    executed = [c for c in check_results if c.get("executed")]
     result = {
         "status": "success" if passed else "failed",
         "passed": passed,
@@ -606,8 +737,13 @@ def verify_task(run_dir: Path, task_id: str, workspace_path: Path | None = None)
 
 
 class Verifier:
+    # 初始化
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    # 验证任务
     def verify_task(self, run_dir: Path, task_id: str, workspace_path: Path | None = None):
-        return verify_task(run_dir, task_id, workspace_path=workspace_path)
+        return verify_task(self._root, run_dir, task_id, workspace_path=workspace_path)
 
 
-__all__ = ["verify_task", "Verifier"]
+__all__ = ["verify_task", "Verifier", "CommandRunner", "set_command_runner"]

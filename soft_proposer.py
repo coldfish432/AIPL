@@ -29,6 +29,7 @@ TEST_ENTRY_FILES = {
 }
 
 
+# limited读取，读取文件内容
 def _limited_read(path: Path, max_kb: int) -> str:
     try:
         data = path.read_text(encoding="utf-8", errors="replace")
@@ -38,6 +39,7 @@ def _limited_read(path: Path, max_kb: int) -> str:
     return data[:limit]
 
 
+# walklimited
 def _walk_limited(root: Path, max_depth: int) -> list[Path]:
     root = root.resolve()
     paths = []
@@ -51,6 +53,7 @@ def _walk_limited(root: Path, max_depth: int) -> list[Path]:
     return paths
 
 
+# 检测projecttype，检查路径是否存在
 def _detect_project_type(root: Path) -> str:
     if (root / "pom.xml").exists() or (root / "build.gradle").exists() or (root / "build.gradle.kts").exists():
         return "java"
@@ -65,6 +68,7 @@ def _detect_project_type(root: Path) -> str:
     return "unknown"
 
 
+# suggestcommands，检查路径是否存在
 def _suggest_commands(project_type: str, root: Path) -> list[str]:
     if project_type == "java":
         if (root / "pom.xml").exists():
@@ -77,6 +81,7 @@ def _suggest_commands(project_type: str, root: Path) -> list[str]:
     return []
 
 
+# 收集conventions，检查路径是否存在
 def _collect_conventions(root: Path) -> list[str]:
     conventions = []
     for name in ("src", "tests", "test", "docs", "scripts", "configs"):
@@ -88,6 +93,7 @@ def _collect_conventions(root: Path) -> list[str]:
     return conventions
 
 
+# 检查项templates
 def _checks_templates(project_type: str, root: Path) -> list[dict]:
     templates = [
         {"type": "file_exists", "path": "outputs/summary.txt"},
@@ -99,6 +105,7 @@ def _checks_templates(project_type: str, root: Path) -> list[dict]:
     return templates
 
 
+# 路径rules
 def _path_rules() -> list[str]:
     return [
         "checks.path must be relative to workspace or outputs/",
@@ -108,6 +115,7 @@ def _path_rules() -> list[str]:
     ]
 
 
+# proposesoft档案，解析JSON，序列化JSON
 def propose_soft_profile(workspace: Path, fingerprint: str | None) -> dict:
     root = workspace.resolve()
     project_type = _detect_project_type(root)

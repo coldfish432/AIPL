@@ -17,3 +17,8 @@ __pycache__/
 
 # Logs
 *.log
+
+mini-model-verify/
+demo-workspaces/
+artifacts/
+backlog/

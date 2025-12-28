@@ -5,6 +5,7 @@ from pathlib import Path
 from infra.io_utils import read_json, write_json
 
 
+# 将被清理的任务状态写回对应 plan 文件
 def update_plan_status(root: Path, plan_id: str, removed: list[dict]) -> None:
     """将被清理的任务状态写回对应 plan 文件。"""
     plan_path = root / "artifacts" / "executions" / plan_id / "plan.json"
@@ -16,12 +17,14 @@ def update_plan_status(root: Path, plan_id: str, removed: list[dict]) -> None:
     write_json(plan_path, plan)
 
 
+# 主入口，解析命令行参数，读取文件内容
 def main():
     parser = argparse.ArgumentParser(description="清理 backlog 中指定 plan_id 的任务，并将状态写回 plan 文件。")
+    parser.add_argument("--root", required=True, help="repo root path")
     parser.add_argument("--plan-id", required=True, help="要清理的 plan_id")
     args = parser.parse_args()
 
-    root = Path(__file__).parent
+    root = Path(args.root).resolve()
     backlog_path = root / "backlog" / f"{args.plan_id}.json"
 
     backlog = read_json(backlog_path, default={"tasks": []})

@@ -13,6 +13,7 @@ from services.profile_service import ProfileService
 from services.verifier_service import Verifier
 
 
+# 列出待办files，检查路径是否存在
 def _list_backlog_files(root: Path) -> list[Path]:
     backlog_dir = root / "backlog"
     if not backlog_dir.exists():
@@ -20,6 +21,7 @@ def _list_backlog_files(root: Path) -> list[Path]:
     return sorted(backlog_dir.glob("*.json"))
 
 
+# 加载待办map，读取文件内容
 def _load_backlog_map(root: Path) -> dict[Path, list[dict]]:
     backlog_map: dict[Path, list[dict]] = {}
     for path in _list_backlog_files(root):
@@ -28,6 +30,7 @@ def _load_backlog_map(root: Path) -> dict[Path, list[dict]]:
     return backlog_map
 
 
+# 用途: load effective hard policy (user_hard overlay on system_hard) and optional checks
 def load_policy(root: Path, workspace_path: str | None, profile_service: IProfileService) -> tuple[dict, str, dict | None, dict | None]:
     """
     load effective hard policy (user_hard overlay on system_hard) and optional checks.
@@ -57,6 +60,7 @@ def load_policy(root: Path, workspace_path: str | None, profile_service: IProfil
     return policy, "profile", profile, capabilities
 
 
+# 选择下一任务
 def pick_next_task(tasks_with_path: list[tuple[dict, Path]], plan_filter: str | None = None):
     tasks = [t for t, _ in tasks_with_path]
     if plan_filter:
@@ -84,6 +88,7 @@ def pick_next_task(tasks_with_path: list[tuple[dict, Path]], plan_filter: str | 
     return candidates[0]
 
 
+# 格式化检查项，序列化JSON
 def format_checks(checks: list[dict]) -> list[str]:
     lines = []
     for c in checks:
@@ -107,6 +112,7 @@ def format_checks(checks: list[dict]) -> list[str]:
     return lines
 
 
+# 写入验证报告，写入文件内容，序列化JSON
 def write_verification_report(run_dir: Path, task_id: str, plan_id: str | None, workspace_path: str | None, passed: bool, reasons: list, checks: list[dict]):
     lines = [
         "# Verification Report",
@@ -152,6 +158,7 @@ def write_verification_report(run_dir: Path, task_id: str, plan_id: str | None, 
     (run_dir / "verification_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+# extract路径from原因
 def _extract_paths_from_reasons(reasons: list) -> list[str]:
     paths: list[str] = []
     for reason in reasons or []:
@@ -164,6 +171,7 @@ def _extract_paths_from_reasons(reasons: list) -> list[str]:
     return paths
 
 
+# extract路径from检查项
 def _extract_paths_from_checks(checks: list[dict]) -> list[str]:
     paths: list[str] = []
     for check in checks or []:
@@ -175,6 +183,7 @@ def _extract_paths_from_checks(checks: list[dict]) -> list[str]:
     return paths
 
 
+# 判断是否包含execution检查
 def _has_execution_check(checks: list[dict]) -> bool:
     for check in checks or []:
         if check.get("type") in {"command", "command_contains", "http_check"}:
@@ -182,6 +191,7 @@ def _has_execution_check(checks: list[dict]) -> bool:
     return False
 
 
+# 合并检查项
 def _merge_checks(task_checks: list[dict], policy_checks: list[dict], high_risk: bool = False) -> list[dict]:
     if _has_execution_check(task_checks) and not high_risk:
         return list(task_checks or [])
@@ -190,6 +200,7 @@ def _merge_checks(task_checks: list[dict], policy_checks: list[dict], high_risk:
     return merged
 
 
+# 判断是否高风险
 def _is_high_risk(value) -> bool:
     if value is True:
         return True
@@ -200,6 +211,7 @@ def _is_high_risk(value) -> bool:
     return False
 
 
+# 加载代码图，检查路径是否存在，解析JSON
 def _load_code_graph(root: Path, plan_id: str | None, code_graph_service: ICodeGraphService):
     if not plan_id:
         return None
@@ -223,18 +235,22 @@ def _load_code_graph(root: Path, plan_id: str | None, code_graph_service: ICodeG
 
 
 class TaskController:
+    # 初始化
     def __init__(
         self,
+        root: Path,
         profile_service: IProfileService,
         verifier: IVerifier,
         code_graph_service: ICodeGraphService,
     ) -> None:
+        self._root = root
         self._profile_service = profile_service
         self._verifier = verifier
         self._code_graph_service = code_graph_service
 
+    # 运行，写入文件内容，追加记录
     def run(self, args: argparse.Namespace) -> None:
-        root = Path(__file__).resolve().parent.parent
+        root = self._root
         if args.plan_id:
             backlog_path = root / "backlog" / f"{args.plan_id}.json"
             backlog = read_json(backlog_path, default={"tasks": []})
@@ -318,7 +334,7 @@ class TaskController:
                 {"type": "step_round_start", "task_id": task_id, "plan_id": plan_id, "step": step_id, "round": round_id, "mode": mode, "ts": time.time()},
             )
 
-            cmd = ["python", "scripts/subagent_shim.py", str(run_dir), task_id, step_id, str(round_id), mode]
+            cmd = ["python", "scripts/subagent_shim.py", "--root", str(root), str(run_dir), task_id, step_id, str(round_id), mode]
             if workspace_path:
                 cmd.extend(["--workspace", workspace_path])
             subprocess.check_call(cmd, cwd=str(root))
@@ -419,18 +435,22 @@ class TaskController:
             self._profile_service.propose_soft(root, Path(workspace_path), reason="repeated_failures")
 
 
-def create_default_controller() -> TaskController:
-    return TaskController(ProfileService(), Verifier(), CodeGraphService())
+# 创建默认控制器
+def create_default_controller(root: Path) -> TaskController:
+    return TaskController(root, ProfileService(), Verifier(root), CodeGraphService(cache_root=root))
 
 
+# 主入口，解析命令行参数
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--root", required=True, help="repo root path")
     parser.add_argument("--plan-id", dest="plan_id", help="?????? plan_id ???")
     parser.add_argument("--workspace", dest="workspace", help="?? workspace ????????? workspace ????????")
     parser.add_argument("--max-rounds", dest="max_rounds", type=int, default=3, help="??????")
     args = parser.parse_args()
 
-    controller = create_default_controller()
+    root = Path(args.root).resolve()
+    controller = create_default_controller(root)
     controller.run(args)
 
 

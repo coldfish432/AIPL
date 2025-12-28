@@ -5,6 +5,7 @@ import time
 import sqlite3
 
 
+# 确保档案tables
 def ensure_profile_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS workspace_profiles ("
@@ -31,6 +32,7 @@ def ensure_profile_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+# 加载JSON，解析JSON
 def _load_json(text: str | None):
     if not text:
         return None
@@ -40,6 +42,7 @@ def _load_json(text: str | None):
         return None
 
 
+# 读取档案
 def read_profile(conn: sqlite3.Connection, workspace_id: str) -> dict | None:
     cur = conn.execute(
         "SELECT workspace_id, workspace_path, fingerprint, user_hard_json, system_hard_json, "
@@ -63,6 +66,7 @@ def read_profile(conn: sqlite3.Connection, workspace_id: str) -> dict | None:
     }
 
 
+# upsert档案，序列化JSON
 def upsert_profile(conn: sqlite3.Connection, profile: dict) -> None:
     payload = {
         "workspace_id": profile.get("workspace_id"),
@@ -103,6 +107,7 @@ def upsert_profile(conn: sqlite3.Connection, profile: dict) -> None:
     )
 
 
+# 日志review，序列化JSON
 def log_review(conn: sqlite3.Connection, workspace_id: str, action: str, fingerprint: str, payload: dict | None) -> None:
     conn.execute(
         "INSERT INTO profile_review_log(workspace_id, action, fingerprint, payload_json, ts) VALUES(?,?,?,?,?)",

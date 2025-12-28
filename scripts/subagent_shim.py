@@ -5,7 +5,19 @@ import time
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# extractroot
+def _extract_root(argv: list[str]) -> Path | None:
+    for idx, arg in enumerate(argv):
+        if arg == "--root" and idx + 1 < len(argv):
+            return Path(argv[idx + 1])
+    return None
+
+
+ROOT_DIR = _extract_root(sys.argv)
+if not ROOT_DIR:
+    raise RuntimeError("--root is required (pass --root <repo_root>)")
+ROOT_DIR = ROOT_DIR.resolve()
 sys.path.insert(0, str(ROOT_DIR))
 
 from infra.io_utils import append_jsonl, write_json
@@ -14,6 +26,7 @@ from services.profile_service import ensure_profile, DEFAULT_ALLOWED_COMMANDS, D
 from services.code_graph_service import CodeGraph
 
 
+# 调用 Codex，返回符合 schema 的 JSON 字符串
 def run_codex(prompt: str, root_dir: Path) -> str:
     """调用 Codex，返回符合 schema 的 JSON 字符串"""
     schema_path = root_dir / "schemas" / "codex_writes.schema.json"
@@ -40,6 +53,7 @@ def run_codex(prompt: str, root_dir: Path) -> str:
     return result.stdout
 
 
+# 加载任务spec，解析JSON，检查路径是否存在
 def load_task_spec(root: Path, task_id: str) -> dict:
     backlog_dir = root / "backlog"
     if not backlog_dir.exists():
@@ -52,6 +66,7 @@ def load_task_spec(root: Path, task_id: str) -> dict:
     return {}
 
 
+# 加载rework，检查路径是否存在，解析JSON
 def load_rework(run_dir: Path, step_id: str, round_id: int):
     if round_id <= 0:
         return None
@@ -61,6 +76,7 @@ def load_rework(run_dir: Path, step_id: str, round_id: int):
     return None
 
 
+# extract路径from原因
 def _extract_paths_from_reasons(reasons: list) -> list[str]:
     paths: list[str] = []
     for reason in reasons or []:
@@ -73,6 +89,7 @@ def _extract_paths_from_reasons(reasons: list) -> list[str]:
     return paths
 
 
+# extract路径from检查项
 def _extract_paths_from_checks(checks: list[dict]) -> list[str]:
     paths: list[str] = []
     for check in checks or []:
@@ -84,6 +101,7 @@ def _extract_paths_from_checks(checks: list[dict]) -> list[str]:
     return paths
 
 
+# 加载代码图，解析JSON，检查路径是否存在
 def _load_code_graph(root: Path, run_dir: Path) -> CodeGraph | None:
     meta_path = run_dir / "meta.json"
     if not meta_path.exists():
@@ -114,6 +132,7 @@ def _load_code_graph(root: Path, run_dir: Path) -> CodeGraph | None:
         return None
 
 
+# summarizerelatedfiles，读取文件内容，检查路径是否存在
 def _summarize_related_files(graph: CodeGraph, seed_paths: list[str], max_files: int = 20, max_lines: int = 200) -> str:
     related = graph.related_files(seed_paths, max_hops=2)
     if not related:
@@ -136,6 +155,7 @@ def _summarize_related_files(graph: CodeGraph, seed_paths: list[str], max_files:
     return "\n\n".join(blocks) if blocks else "none"
 
 
+# snapshot输出，读取文件内容
 def snapshot_outputs(outputs_dir: Path, max_chars_per_file: int = 4000) -> dict:
     snap = {}
     for p in outputs_dir.glob("**/*"):
@@ -149,6 +169,7 @@ def snapshot_outputs(outputs_dir: Path, max_chars_per_file: int = 4000) -> dict:
     return snap
 
 
+# 解析under
 def resolve_under(base: Path, rel_path: str) -> Path | None:
     rel_path = rel_path.replace("\\", "/")
     if rel_path.startswith("/") or rel_path.startswith("\\"):
@@ -164,6 +185,7 @@ def resolve_under(base: Path, rel_path: str) -> Path | None:
     return dest
 
 
+# 判断是否allowed
 def is_allowed(path: Path, allowlist: list[str], denylist: list[str]) -> bool:
     posix = path.as_posix()
     for d in denylist:
@@ -177,6 +199,7 @@ def is_allowed(path: Path, allowlist: list[str], denylist: list[str]) -> bool:
     return False
 
 
+# applywrites，写入文件内容，创建目录
 def apply_writes(run_dir: Path, workspace: Path, writes: list[dict], allow_write: list[str], deny_write: list[str]) -> tuple[list[str], list[dict]]:
     produced = []
     skipped = []
@@ -203,6 +226,7 @@ def apply_writes(run_dir: Path, workspace: Path, writes: list[dict], allow_write
     return produced, skipped
 
 
+# 执行允许的命令，cwd=workspace。commands 可以是字符串或 {cmd, timeout}
 def run_commands(workspace: Path, commands, timeout_default: int = 300, allowed_prefix: tuple[str, ...] = tuple(DEFAULT_ALLOWED_COMMANDS)) -> tuple[list[dict], bool]:
     """
     执行允许的命令，cwd=workspace。commands 可以是字符串或 {cmd, timeout}。
@@ -251,8 +275,10 @@ def run_commands(workspace: Path, commands, timeout_default: int = 300, allowed_
     return logs, all_passed
 
 
+# 解析参数，解析命令行参数
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--root", required=True, help="repo root path")
     parser.add_argument("run_dir")
     parser.add_argument("task_id")
     parser.add_argument("step_id")
@@ -262,6 +288,7 @@ def parse_args():
     return parser.parse_args()
 
 
+# 主入口，写入文件内容，追加记录
 def main():
     args = parse_args()
     run_dir = Path(args.run_dir)
@@ -275,7 +302,7 @@ def main():
     outputs_dir = run_dir / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
-    root = ROOT_DIR
+    root = Path(args.root).resolve()
     task_spec = load_task_spec(root, task_id)
     acceptance = task_spec.get("acceptance_criteria", [])
     checks = task_spec.get("checks", [])

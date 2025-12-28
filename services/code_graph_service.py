@@ -38,6 +38,7 @@ LANG_BY_EXT = {
 JS_TS_EXTS = [".ts", ".tsx", ".js", ".jsx"]
 
 
+# envbool
 def _env_bool(key: str, default: bool = False) -> bool:
     raw = os.getenv(key)
     if raw is None:
@@ -45,6 +46,7 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# 规范化rel路径
 def _normalize_rel_path(workspace_root: Path, path: str | Path) -> str | None:
     if isinstance(path, Path):
         candidate = path
@@ -65,6 +67,7 @@ def _normalize_rel_path(workspace_root: Path, path: str | Path) -> str | None:
 
 
 class CodeGraph:
+    # 初始化
     def __init__(self, workspace_root: Path, fingerprint: str | None = None):
         self.workspace_root = workspace_root.resolve()
         self.fingerprint = fingerprint
@@ -73,12 +76,14 @@ class CodeGraph:
         self.rdeps: dict[str, set[str]] = {}
         self._edges: set[tuple[str, str, str]] = set()
 
+    # 构建
     @classmethod
     def build(cls, workspace_root: Path, fingerprint: str | None = None) -> "CodeGraph":
         graph = cls(workspace_root, fingerprint=fingerprint)
         graph._build()
         return graph
 
+    # 加载，解析JSON，读取文件内容
     @classmethod
     def load(cls, path: Path) -> "CodeGraph":
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -107,10 +112,12 @@ class CodeGraph:
                     graph._edges.add((src, dst, etype))
         return graph
 
+    # 保存，写入文件内容，创建目录
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # todict
     def to_dict(self) -> dict:
         node_paths = sorted(self.nodes.keys())
         nodes = []
@@ -140,9 +147,11 @@ class CodeGraph:
             "rdeps": rdeps,
         }
 
+    # 规范化路径
     def normalize_path(self, path: str | Path) -> str | None:
         return _normalize_rel_path(self.workspace_root, path)
 
+    # relatedfiles
     def related_files(self, paths: list[str], max_hops: int = 2) -> list[str]:
         if max_hops < 0:
             return []
@@ -169,6 +178,7 @@ class CodeGraph:
                 queue.append((nxt, depth + 1))
         return sorted(visited)
 
+    # testsforfiles
     def tests_for_files(self, paths: list[str]) -> list[str]:
         test_files = [p for p in self.nodes if _is_test_file(p)]
         if not test_files:
@@ -201,6 +211,7 @@ class CodeGraph:
                     matches.add(hit)
         return sorted(matches)
 
+    # 构建
     def _build(self) -> None:
         files = self._scan_files()
         java_class_map: dict[str, str] = {}
@@ -230,6 +241,7 @@ class CodeGraph:
                         self._add_edge(rel_path, target, "imports")
         self._finalize_deps()
 
+    # scanfiles，读取文件内容
     def _scan_files(self) -> list[tuple[str, str, str]]:
         results: list[tuple[str, str, str]] = []
         for root, dirs, files in os.walk(self.workspace_root):
@@ -261,11 +273,13 @@ class CodeGraph:
                 results.append((rel_path, lang, text))
         return results
 
+    # 确保node
     def _ensure_node(self, rel_path: str, lang: str) -> None:
         if rel_path in self.nodes:
             return
         self.nodes[rel_path] = {"type": "file", "lang": lang}
 
+    # 添加edge
     def _add_edge(self, src: str, dst: str, edge_type: str) -> None:
         if src == dst:
             return
@@ -274,12 +288,14 @@ class CodeGraph:
         self.deps.setdefault(src, set()).add(dst)
         self._edges.add((src, dst, edge_type))
 
+    # finalizedeps
     def _finalize_deps(self) -> None:
         for src, targets in self.deps.items():
             for dst in targets:
                 self.rdeps.setdefault(dst, set()).add(src)
 
 
+# 解析pythonimports
 def _parse_python_imports(text: str) -> list[dict]:
     imports = []
     try:
@@ -310,6 +326,7 @@ def _parse_python_imports(text: str) -> list[dict]:
     return imports
 
 
+# pythonsearchroots，检查路径是否存在
 def _python_search_roots(workspace_root: Path) -> list[Path]:
     roots = [workspace_root]
     src = workspace_root / "src"
@@ -318,6 +335,7 @@ def _python_search_roots(workspace_root: Path) -> list[Path]:
     return roots
 
 
+# 解析pythonimport，检查路径是否存在
 def _resolve_python_import(workspace_root: Path, rel_path: str, entry: dict) -> list[str]:
     module = entry.get("module")
     level = int(entry.get("level") or 0)
@@ -360,6 +378,7 @@ def _resolve_python_import(workspace_root: Path, rel_path: str, entry: dict) -> 
     return list(dict.fromkeys(resolved))
 
 
+# expandpythoncandidates
 def _expand_python_candidates(base: Path) -> list[Path]:
     candidates = []
     if base.suffix == ".py":
@@ -370,6 +389,7 @@ def _expand_python_candidates(base: Path) -> list[Path]:
     return candidates
 
 
+# 解析javapackage
 def _parse_java_package(text: str) -> str:
     for line in text.splitlines():
         line = line.strip()
@@ -380,6 +400,7 @@ def _parse_java_package(text: str) -> str:
     return ""
 
 
+# 解析javaimports
 def _parse_java_imports(text: str) -> list[str]:
     imports = []
     for line in text.splitlines():
@@ -392,6 +413,7 @@ def _parse_java_imports(text: str) -> list[str]:
     return imports
 
 
+# 解析jsimports
 def _parse_js_imports(text: str) -> list[str]:
     imports = []
     for m in re.finditer(r"from\s+['\"]([^'\"]+)['\"]", text):
@@ -401,6 +423,7 @@ def _parse_js_imports(text: str) -> list[str]:
     return list(dict.fromkeys(imports))
 
 
+# 解析jsimport，检查路径是否存在
 def _resolve_js_import(workspace_root: Path, rel_path: str, spec: str) -> list[str]:
     spec = spec.strip()
     if not spec:
@@ -434,6 +457,7 @@ def _resolve_js_import(workspace_root: Path, rel_path: str, spec: str) -> list[s
     return list(dict.fromkeys(resolved))
 
 
+# 判断是否test文件
 def _is_test_file(rel_path: str) -> bool:
     name = Path(rel_path).name
     if "/tests/" in f"/{rel_path}/" or "/test/" in f"/{rel_path}/" or "/__tests__/" in f"/{rel_path}/":
@@ -449,20 +473,7 @@ def _is_test_file(rel_path: str) -> bool:
     return False
 
 
-def _get_cache_root() -> Path:
-    root = os.getenv("AIPL_CODE_GRAPH_CACHE_ROOT")
-    if root:
-        return Path(root)
-    return Path.cwd()
-
-
-def _get_cache_path(workspace_root: Path, fingerprint: str | None) -> Path:
-    cache_root = _get_cache_root() / "artifacts"
-    cache_root.mkdir(parents=True, exist_ok=True)
-    key = fingerprint or hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()
-    return cache_root / f"code-graph-cache-{key}.json"
-
-
+# 加载缓存，解析JSON，检查路径是否存在
 def _load_cache(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"files": {}}
@@ -476,11 +487,13 @@ def _load_cache(path: Path) -> dict[str, Any]:
     return data
 
 
+# 保存缓存，写入文件内容，创建目录
 def _save_cache(path: Path, cache: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# 解析文件元数据
 def _parse_file_meta(workspace_root: Path, rel_path: str, lang: str, text: str) -> dict[str, Any]:
     meta: dict[str, Any] = {"lang": lang}
     if lang == "python":
@@ -496,6 +509,7 @@ def _parse_file_meta(workspace_root: Path, rel_path: str, lang: str, text: str) 
     return meta
 
 
+# scanfilesincremental，读取文件内容
 def _scan_files_incremental(workspace_root: Path, cache: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     results: list[dict[str, Any]] = []
     files_cache: dict[str, Any] = cache.get("files", {}) or {}
@@ -545,6 +559,7 @@ def _scan_files_incremental(workspace_root: Path, cache: dict[str, Any]) -> tupl
     return results, cache
 
 
+# 构建from元数据
 def _build_from_meta(workspace_root: Path, fingerprint: str | None, files_meta: list[dict[str, Any]]) -> CodeGraph:
     graph = CodeGraph(workspace_root, fingerprint=fingerprint)
     java_class_map: dict[str, str] = {}
@@ -580,6 +595,7 @@ def _build_from_meta(workspace_root: Path, fingerprint: str | None, files_meta: 
     return graph
 
 
+# refresh缓存
 def _refresh_cache(workspace_root: Path, fingerprint: str | None, cache_path: Path) -> None:
     cache = _load_cache(cache_path)
     _, cache = _scan_files_incremental(workspace_root, cache)
@@ -592,6 +608,7 @@ def _refresh_cache(workspace_root: Path, fingerprint: str | None, cache_path: Pa
 _WATCHERS: dict[str, Any] = {}
 
 
+# 启动watch
 def _start_watch(workspace_root: Path, fingerprint: str | None, cache_path: Path) -> None:
     key = str(cache_path)
     if key in _WATCHERS:
@@ -604,10 +621,12 @@ def _start_watch(workspace_root: Path, fingerprint: str | None, cache_path: Path
         return
 
     class _Handler(FileSystemEventHandler):
+        # 初始化
         def __init__(self) -> None:
             self._lock = threading.Lock()
             self._last = 0.0
 
+        # onany事件
         def on_any_event(self, event) -> None:
             now = time.time()
             with self._lock:
@@ -628,12 +647,33 @@ def _start_watch(workspace_root: Path, fingerprint: str | None, cache_path: Path
 
 
 class CodeGraphService:
+    # 初始化
+    def __init__(self, cache_root: Path | None = None) -> None:
+        self._cache_root = cache_root
+
+    # 解析缓存root
+    def _resolve_cache_root(self) -> Path:
+        if self._cache_root is not None:
+            return self._cache_root
+        root = os.getenv("AIPL_CODE_GRAPH_CACHE_ROOT")
+        if root:
+            return Path(root)
+        return Path.cwd()
+
+    # 获取缓存路径，创建目录
+    def _get_cache_path(self, workspace_root: Path, fingerprint: str | None) -> Path:
+        cache_root = self._resolve_cache_root() / "artifacts"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        key = fingerprint or hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()
+        return cache_root / f"code-graph-cache-{key}.json"
+
+    # 构建
     def build(self, workspace_root: Path, fingerprint: str | None = None, *, watch: bool = False) -> CodeGraph:
         use_cache = os.getenv("AIPL_CODE_GRAPH_CACHE", "1") != "0"
         watch = watch or _env_bool("AIPL_CODE_GRAPH_WATCH", False)
         if not use_cache:
             return CodeGraph.build(workspace_root, fingerprint=fingerprint)
-        cache_path = _get_cache_path(workspace_root, fingerprint)
+        cache_path = self._get_cache_path(workspace_root, fingerprint)
         cache = _load_cache(cache_path)
         files_meta, cache = _scan_files_incremental(workspace_root, cache)
         cache["workspace_root"] = str(workspace_root)
@@ -644,9 +684,11 @@ class CodeGraphService:
             _start_watch(workspace_root, fingerprint, cache_path)
         return _build_from_meta(workspace_root, fingerprint, files_meta)
 
+    # 加载
     def load(self, path: Path) -> CodeGraph:
         return CodeGraph.load(path)
 
+    # 保存
     def save(self, graph: CodeGraph, path: Path) -> None:
         graph.save(path)
 

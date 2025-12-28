@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 
+# envbool
 def _env_bool(key: str, default: bool = False) -> bool:
     raw = os.getenv(key)
     if raw is None:
@@ -11,6 +12,7 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# envint
 def _env_int(key: str, default: int) -> int:
     raw = os.getenv(key)
     if raw is None:
@@ -21,6 +23,7 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+# env列出
 def _env_list(key: str, default: list[str]) -> list[str]:
     raw = os.getenv(key)
     if raw is None:
@@ -43,6 +46,7 @@ DEFAULT_DENY_WRITE = _env_list(
 )
 
 
+# 解析db路径，检查路径是否存在，读取文件内容
 def resolve_db_path(root: Path, env_key: str = "AIPL_DB_PATH") -> Path | None:
     env_path = os.getenv(env_key)
     if env_path:

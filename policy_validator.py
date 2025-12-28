@@ -6,6 +6,7 @@ from pathlib import Path
 ALLOWED_PATH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
 
 
+# 默认路径rules
 def default_path_rules() -> list[str]:
     return [
         "path must be relative to workspace or outputs/",
@@ -15,10 +16,12 @@ def default_path_rules() -> list[str]:
     ]
 
 
+# normrel路径
 def _norm_rel_path(path: str) -> str:
     return path.replace("\\", "/").strip()
 
 
+# 判断是否saferelative路径
 def is_safe_relative_path(path: str) -> bool:
     if not isinstance(path, str):
         return False
@@ -37,6 +40,7 @@ def is_safe_relative_path(path: str) -> bool:
     return True
 
 
+# 判断是否under
 def _is_under(path: str, roots: list[str]) -> bool:
     path = _norm_rel_path(path)
     for root in roots:
@@ -48,6 +52,7 @@ def _is_under(path: str, roots: list[str]) -> bool:
     return False
 
 
+# 判断是否写入allowed
 def is_write_allowed(rel_path: str, allow_write: list[str], deny_write: list[str]) -> bool:
     if not is_safe_relative_path(rel_path):
         return False
@@ -58,6 +63,7 @@ def is_write_allowed(rel_path: str, allow_write: list[str], deny_write: list[str
     return _is_under(rel_path, allow_write)
 
 
+# 校验检查项
 def validate_checks(checks: list[dict], allowed_commands: list[str], command_whitelist: list[str] | None = None) -> tuple[list[dict], list[dict]]:
     cleaned = []
     reasons: list[dict] = []
@@ -93,6 +99,7 @@ def validate_checks(checks: list[dict], allowed_commands: list[str], command_whi
     return cleaned, reasons
 
 
+# 校验writes
 def validate_writes(writes: list[dict], allow_write: list[str], deny_write: list[str]) -> tuple[list[dict], list[dict]]:
     cleaned = []
     reasons = []
@@ -116,6 +123,7 @@ def validate_writes(writes: list[dict], allow_write: list[str], deny_write: list
     return cleaned, reasons
 
 
+# 校验commands
 def validate_commands(commands: list, allowed_commands: list[str], default_timeout: int) -> tuple[list[dict], list[dict]]:
     cleaned = []
     reasons = []

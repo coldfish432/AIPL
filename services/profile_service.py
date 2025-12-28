@@ -32,17 +32,20 @@ FINGERPRINT_FILES = [
 FINGERPRINT_GLOBS = ["*.sln"]
 
 
+# 规范化工作区路径
 def normalize_workspace_path(workspace: Path) -> str:
     path = workspace.resolve()
     raw = str(path)
     return raw.lower() if os.name == "nt" else raw
 
 
+# 计算工作区ID
 def compute_workspace_id(workspace: Path) -> str:
     norm = normalize_workspace_path(workspace)
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
+# 收集fingerprintfiles，检查路径是否存在
 def _collect_fingerprint_files(workspace: Path) -> list[Path]:
     files: list[Path] = []
     for name in FINGERPRINT_FILES:
@@ -55,6 +58,7 @@ def _collect_fingerprint_files(workspace: Path) -> list[Path]:
     return sorted(uniq, key=lambda p: p.as_posix())
 
 
+# 计算fingerprint
 def compute_fingerprint(workspace: Path) -> str:
     h = hashlib.sha256()
     files = _collect_fingerprint_files(workspace)
@@ -70,6 +74,7 @@ def compute_fingerprint(workspace: Path) -> str:
     return h.hexdigest()
 
 
+# coerce列出
 def _coerce_list(value) -> list[str] | None:
     if value is None:
         return None
@@ -80,6 +85,7 @@ def _coerce_list(value) -> list[str] | None:
     return None
 
 
+# 规范化relentries
 def _normalize_rel_entries(items: list[str] | None) -> list[str] | None:
     if items is None:
         return None
@@ -90,6 +96,7 @@ def _normalize_rel_entries(items: list[str] | None) -> list[str] | None:
     return normed
 
 
+# 加载userhard策略，检查路径是否存在，解析JSON
 def load_user_hard_policy(workspace: Path) -> dict | None:
     json_path = workspace / "aipl.policy.json"
     toml_path = workspace / "aipl.policy.toml"
@@ -106,6 +113,7 @@ def load_user_hard_policy(workspace: Path) -> dict | None:
     return None
 
 
+# 构建systemhard策略
 def build_system_hard_policy(workspace: Path) -> dict:
     return {
         "allow_write": [""],
@@ -117,6 +125,7 @@ def build_system_hard_policy(workspace: Path) -> dict:
     }
 
 
+# sanitizeuserhard
 def sanitize_user_hard(user_hard: dict | None) -> tuple[dict | None, list[dict]]:
     if not isinstance(user_hard, dict):
         return None, []
@@ -144,6 +153,7 @@ def sanitize_user_hard(user_hard: dict | None) -> tuple[dict | None, list[dict]]
     return cleaned, reasons
 
 
+# 合并hard策略
 def merge_hard_policy(system_hard: dict, user_hard: dict | None) -> tuple[dict, list[dict]]:
     sanitized_user, reasons = sanitize_user_hard(user_hard)
     effective = dict(system_hard)
@@ -153,6 +163,7 @@ def merge_hard_policy(system_hard: dict, user_hard: dict | None) -> tuple[dict, 
     return effective, reasons
 
 
+# 打开档案db，创建目录
 def _open_profile_db(root: Path) -> sqlite3.Connection | None:
     db_path = resolve_db_path(root)
     if not db_path:
@@ -163,6 +174,7 @@ def _open_profile_db(root: Path) -> sqlite3.Connection | None:
     return conn
 
 
+# 确保档案
 def ensure_profile(root: Path, workspace: Path) -> dict:
     workspace = workspace.resolve()
     workspace_id = compute_workspace_id(workspace)
@@ -218,6 +230,7 @@ def ensure_profile(root: Path, workspace: Path) -> dict:
     }
 
 
+# proposesoft
 def propose_soft(root: Path, workspace: Path, reason: str) -> dict:
     workspace = workspace.resolve()
     profile = ensure_profile(root, workspace)
@@ -236,6 +249,7 @@ def propose_soft(root: Path, workspace: Path, reason: str) -> dict:
     return profile
 
 
+# approvesoft
 def approve_soft(root: Path, workspace: Path) -> dict:
     workspace = workspace.resolve()
     profile = ensure_profile(root, workspace)
@@ -256,6 +270,7 @@ def approve_soft(root: Path, workspace: Path) -> dict:
     return profile
 
 
+# rejectsoft
 def reject_soft(root: Path, workspace: Path) -> dict:
     workspace = workspace.resolve()
     profile = ensure_profile(root, workspace)
@@ -273,6 +288,7 @@ def reject_soft(root: Path, workspace: Path) -> dict:
     return profile
 
 
+# 加载档案
 def load_profile(root: Path, workspace: Path) -> dict | None:
     workspace = workspace.resolve()
     workspace_id = compute_workspace_id(workspace)
@@ -285,6 +301,7 @@ def load_profile(root: Path, workspace: Path) -> dict | None:
     return profile
 
 
+# 判断是否需要proposeonfailure，检查路径是否存在，解析JSON
 def should_propose_on_failure(root: Path, workspace: Path, threshold: int = 2, limit: int = 20) -> bool:
     workspace = workspace.resolve()
     reasons_count: dict[str, int] = {}
@@ -341,21 +358,27 @@ def should_propose_on_failure(root: Path, workspace: Path, threshold: int = 2, l
 
 
 class ProfileService:
+    # 确保档案
     def ensure_profile(self, root: Path, workspace: Path) -> dict:
         return ensure_profile(root, workspace)
 
+    # proposesoft
     def propose_soft(self, root: Path, workspace: Path, reason: str) -> dict:
         return propose_soft(root, workspace, reason)
 
+    # approvesoft
     def approve_soft(self, root: Path, workspace: Path) -> dict:
         return approve_soft(root, workspace)
 
+    # rejectsoft
     def reject_soft(self, root: Path, workspace: Path) -> dict:
         return reject_soft(root, workspace)
 
+    # 加载档案
     def load_profile(self, root: Path, workspace: Path) -> dict | None:
         return load_profile(root, workspace)
 
+    # 判断是否需要proposeonfailure
     def should_propose_on_failure(self, root: Path, workspace: Path, threshold: int = 2, limit: int = 20) -> bool:
         return should_propose_on_failure(root, workspace, threshold=threshold, limit=limit)
 

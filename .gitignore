@@ -26,6 +26,7 @@ mini-model-verify/
 demo-workspaces/
 artifacts/
 backlog/
+tests/
 
 # Temp
 .pytest_cache/
@@ -39,4 +40,3 @@ ui-electron/.tmp/
 
 
 fix
-tests

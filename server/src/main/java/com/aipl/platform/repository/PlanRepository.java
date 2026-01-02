@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -29,9 +30,12 @@ public class PlanRepository {
             return List.of();
         }
         List<JsonNode> items = new ArrayList<>();
-        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
-             PreparedStatement stmt = conn.prepareStatement("SELECT plan_id, updated_at, raw_json FROM plans ORDER BY updated_at DESC")) {
-            try (ResultSet rs = stmt.executeQuery()) {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            try (Statement init = conn.createStatement()) {
+                init.execute("CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, updated_at INTEGER, raw_json TEXT)");
+            }
+            try (PreparedStatement stmt = conn.prepareStatement("SELECT plan_id, updated_at, raw_json FROM plans ORDER BY updated_at DESC");
+                 ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String planId = rs.getString("plan_id");
                     long updatedAt = rs.getLong("updated_at");
@@ -56,5 +60,20 @@ public class PlanRepository {
             }
         }
         return items;
+    }
+
+    public void deletePlan(String planId) throws Exception {
+        if (planId == null || planId.isBlank() || dbPath == null) {
+            return;
+        }
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            try (Statement init = conn.createStatement()) {
+                init.execute("CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, updated_at INTEGER, raw_json TEXT)");
+            }
+            try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM plans WHERE plan_id=?")) {
+                stmt.setString(1, planId);
+                stmt.executeUpdate();
+            }
+        }
     }
 }

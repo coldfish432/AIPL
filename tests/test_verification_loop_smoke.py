@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from services import verifier_service
+from services.verifier import VerifierService
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -17,11 +17,11 @@ def test_verification_loop_smoke(tmp_path, backlog_task, fake_runner):
     task_id, _ = backlog_task(checks, workspace=workspace)
 
     fake_runner.queue_result({"executed": True, "timed_out": False, "returncode": 1, "stdout": "", "stderr": "fail"})
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
     assert passed is False
 
     fake_runner.queue_result({"executed": True, "timed_out": False, "returncode": 0, "stdout": "ok", "stderr": ""})
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
     assert passed is True
 
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))

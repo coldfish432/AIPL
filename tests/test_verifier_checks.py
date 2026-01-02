@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-from services import verifier_service
+from services.verifier import VerifierService
+from services.verifier.checks import http as http_checks
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +46,7 @@ def test_verifier_handles_file_and_json_checks(tmp_path, backlog_task, monkeypat
     def _fake_urlopen(req, timeout=10):
         return _FakeResponse('{"ok": true}', status=200)
 
-    monkeypatch.setattr(verifier_service, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(http_checks, "urlopen", _fake_urlopen)
 
     checks = [
         {"type": "http_check", "url": "http://localhost/health", "expected_status": 200},
@@ -55,7 +56,7 @@ def test_verifier_handles_file_and_json_checks(tmp_path, backlog_task, monkeypat
     ]
     task_id, _ = backlog_task(checks, workspace=workspace)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is True
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))
@@ -69,7 +70,7 @@ def test_file_exists_missing_and_escape(tmp_path, backlog_task, monkeypatch):
     run_dir.mkdir()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setattr(verifier_service, "urlopen", lambda req, timeout=10: _FakeResponse("ok", status=200))
+    monkeypatch.setattr(http_checks, "urlopen", lambda req, timeout=10: _FakeResponse("ok", status=200))
     checks = [
         {"type": "http_check", "url": "http://localhost/health", "expected_status": 200},
         {"type": "file_exists", "path": "missing.txt"},
@@ -77,7 +78,7 @@ def test_file_exists_missing_and_escape(tmp_path, backlog_task, monkeypatch):
     ]
     task_id, _ = backlog_task(checks, workspace=workspace)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is False
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))
@@ -94,14 +95,14 @@ def test_file_contains_mismatch(tmp_path, backlog_task, monkeypatch):
     workspace.mkdir()
     target = workspace / "note.txt"
     target.write_text("hello\n", encoding="utf-8")
-    monkeypatch.setattr(verifier_service, "urlopen", lambda req, timeout=10: _FakeResponse("ok", status=200))
+    monkeypatch.setattr(http_checks, "urlopen", lambda req, timeout=10: _FakeResponse("ok", status=200))
     checks = [
         {"type": "http_check", "url": "http://localhost/health", "expected_status": 200},
         {"type": "file_contains", "path": "note.txt", "needle": "world"},
     ]
     task_id, _ = backlog_task(checks, workspace=workspace)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is False
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))
@@ -128,7 +129,7 @@ def test_json_schema_mismatch_and_depth_limit(tmp_path, backlog_task, monkeypatc
     workspace.mkdir()
     data_path = workspace / "data.json"
     data_path.write_text(json.dumps({"ok": "no"}), encoding="utf-8")
-    monkeypatch.setattr(verifier_service, "urlopen", lambda req, timeout=10: _FakeResponse("ok", status=200))
+    monkeypatch.setattr(http_checks, "urlopen", lambda req, timeout=10: _FakeResponse("ok", status=200))
     checks = [
         {"type": "http_check", "url": "http://localhost/health", "expected_status": 200},
         {"type": "json_schema", "path": "data.json", "schema": {"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}}},
@@ -136,7 +137,7 @@ def test_json_schema_mismatch_and_depth_limit(tmp_path, backlog_task, monkeypatc
     ]
     task_id, _ = backlog_task(checks, workspace=workspace)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is False
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))
@@ -153,14 +154,14 @@ def test_json_schema_file_too_large(tmp_path, backlog_task, monkeypatch):
     workspace.mkdir()
     data_path = workspace / "big.json"
     data_path.write_bytes(b"a" * (1024 * 1024 + 5))
-    monkeypatch.setattr(verifier_service, "urlopen", lambda req, timeout=10: _FakeResponse("ok", status=200))
+    monkeypatch.setattr(http_checks, "urlopen", lambda req, timeout=10: _FakeResponse("ok", status=200))
     checks = [
         {"type": "http_check", "url": "http://localhost/health", "expected_status": 200},
         {"type": "json_schema", "path": "big.json", "schema": {"type": "string"}},
     ]
     task_id, _ = backlog_task(checks, workspace=workspace)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is False
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))
@@ -175,7 +176,7 @@ def test_http_check_not_allowed_host(tmp_path, backlog_task):
     checks = [{"type": "http_check", "url": "http://example.com/health", "expected_status": 200}]
     task_id, _ = backlog_task(checks)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=None)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=None)
 
     assert passed is False
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))
@@ -193,8 +194,8 @@ def test_http_check_error(tmp_path, backlog_task, monkeypatch):
     def _boom(req, timeout=10):
         raise TimeoutError("timeout")
 
-    monkeypatch.setattr(verifier_service, "urlopen", _boom)
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=None)
+    monkeypatch.setattr(http_checks, "urlopen", _boom)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=None)
 
     assert passed is False
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))
@@ -211,11 +212,11 @@ def test_command_contains_match_and_mismatch(tmp_path, backlog_task, fake_runner
     task_id, _ = backlog_task(checks, workspace=workspace)
 
     fake_runner.queue_result({"executed": True, "timed_out": False, "returncode": 0, "stdout": "OK\n", "stderr": ""})
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
     assert passed is True
 
     fake_runner.queue_result({"executed": True, "timed_out": False, "returncode": 0, "stdout": "nope\n", "stderr": ""})
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
     assert passed is False
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))
     assert result["checks"][0]["reason"]["type"] == "command_output_missing"

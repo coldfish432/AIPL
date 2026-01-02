@@ -1,0 +1,2 @@
+collected 1 items
+results: 1 passed

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from config import POLICY_ENFORCED
+
 ALLOWED_PATH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
 
 
@@ -64,9 +66,22 @@ def is_write_allowed(rel_path: str, allow_write: list[str], deny_write: list[str
 
 
 # 校验检查项
-def validate_checks(checks: list[dict], allowed_commands: list[str], command_whitelist: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+def _policy_enforced(enforce_policy: bool | None) -> bool:
+    if enforce_policy is None:
+        return POLICY_ENFORCED
+    return bool(enforce_policy)
+
+
+def validate_checks(
+    checks: list[dict],
+    allowed_commands: list[str],
+    command_blacklist: list[str] | None = None,
+    command_whitelist: list[str] | None = None,
+    enforce_policy: bool | None = None,
+) -> tuple[list[dict], list[dict]]:
     cleaned = []
     reasons: list[dict] = []
+    enforced = _policy_enforced(enforce_policy)
     for idx, check in enumerate(checks or []):
         if not isinstance(check, dict):
             reasons.append({"type": "invalid_check", "index": idx, "reason": "not_object"})
@@ -84,10 +99,17 @@ def validate_checks(checks: list[dict], allowed_commands: list[str], command_whi
             cmd = (check.get("cmd") or "").strip()
             if not any(cmd.startswith(p) for p in allowed_commands):
                 reasons.append({"type": "command_not_allowed", "index": idx, "cmd": cmd, "expected": allowed_commands})
-                continue
-            if command_whitelist is not None and cmd not in command_whitelist:
-                reasons.append({"type": "command_not_in_whitelist", "index": idx, "cmd": cmd})
-                continue
+                if enforced:
+                    continue
+            if command_whitelist:
+                if cmd not in command_whitelist:
+                    reasons.append({"type": "command_not_in_whitelist", "index": idx, "cmd": cmd, "expected": command_whitelist})
+                    continue
+            if command_blacklist:
+                if any(cmd.startswith(p) for p in command_blacklist):
+                    reasons.append({"type": "command_in_blacklist", "index": idx, "cmd": cmd})
+                    if enforced:
+                        continue
             cwd = check.get("cwd")
             if cwd and not is_safe_relative_path(cwd):
                 reasons.append({"type": "invalid_cwd", "index": idx, "cwd": cwd})
@@ -95,14 +117,21 @@ def validate_checks(checks: list[dict], allowed_commands: list[str], command_whi
             check = dict(check)
             check["allow_prefixes"] = allowed_commands
             check["cwd"] = "."
+            check["policy_enforced"] = enforced
         cleaned.append(check)
     return cleaned, reasons
 
 
 # 校验writes
-def validate_writes(writes: list[dict], allow_write: list[str], deny_write: list[str]) -> tuple[list[dict], list[dict]]:
+def validate_writes(
+    writes: list[dict],
+    allow_write: list[str],
+    deny_write: list[str],
+    enforce_policy: bool | None = None,
+) -> tuple[list[dict], list[dict]]:
     cleaned = []
     reasons = []
+    enforced = _policy_enforced(enforce_policy)
     for idx, w in enumerate(writes or []):
         if not isinstance(w, dict):
             reasons.append({"type": "invalid_write", "index": idx, "reason": "not_object"})
@@ -119,14 +148,22 @@ def validate_writes(writes: list[dict], allow_write: list[str], deny_write: list
             if not is_write_allowed(path, allow_write, deny_write):
                 reasons.append({"type": "write_not_allowed", "index": idx, "path": path})
                 continue
+        w = dict(w)
+        w["policy_enforced"] = enforced
         cleaned.append(w)
     return cleaned, reasons
 
 
 # 校验commands
-def validate_commands(commands: list, allowed_commands: list[str], default_timeout: int) -> tuple[list[dict], list[dict]]:
+def validate_commands(
+    commands: list,
+    allowed_commands: list[str],
+    default_timeout: int,
+    enforce_policy: bool | None = None,
+) -> tuple[list[dict], list[dict]]:
     cleaned = []
     reasons = []
+    enforced = _policy_enforced(enforce_policy)
     for idx, item in enumerate(commands or []):
         if isinstance(item, dict):
             cmd = (item.get("cmd") or "").strip()
@@ -141,8 +178,9 @@ def validate_commands(commands: list, allowed_commands: list[str], default_timeo
             continue
         if not any(cmd.startswith(p) for p in allowed_commands):
             reasons.append({"type": "command_not_allowed", "index": idx, "cmd": cmd, "expected": allowed_commands})
-            continue
+            if enforced:
+                continue
         if timeout <= 0:
             timeout = int(default_timeout)
-        cleaned.append({"cmd": cmd, "timeout": timeout})
+        cleaned.append({"cmd": cmd, "timeout": timeout, "policy_enforced": enforced})
     return cleaned, reasons

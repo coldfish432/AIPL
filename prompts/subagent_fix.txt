@@ -4,9 +4,9 @@ Context:
 - Task ID: {task_id}
 - Run: {run_name}
 - Workspace: {workspace}
-- Hard policy (must obey):
+- Policy intent (declarative; platform enforces allow/deny):
 {hard_block}
-- Soft profile (reference only, do not change permissions):
+- Soft profile (reference only):
 {soft_block}
 
 Acceptance criteria:
@@ -46,6 +46,6 @@ Additional rules:
 - If checks include command_contains, make sure output includes the needle.
 - If checks include http_check, ensure the local service is running or record why it cannot be reached.
 - 写入规则：target=workspace 只能写入工作区允许路径；target=run 用于日志/报告。
-- commands 字段必须存在，即使为空列表（如 []），仅使用安全白名单命令（python/pytest/mvn/gradle/npm/node/pnpm/yarn）。
+- commands 字段必须存在，即使为空列表（如 []），优先使用白名单命令（python/pytest/mvn/gradle/npm/node/pnpm/yarn），平台负责真实阻断。
 - 文件内如需注释/提示语，优先使用简洁中文。
 - 如需执行检查/测试，可在 commands 中列出（失败输出会反馈到下一轮）。

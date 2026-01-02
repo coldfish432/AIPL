@@ -1,6 +1,8 @@
 package com.aipl.platform.api.controller;
 
+import com.aipl.platform.api.dto.request.AssistantConfirmRequest;
 import com.aipl.platform.api.dto.request.RunRequest;
+import com.aipl.platform.api.dto.request.ReworkRequest;
 import com.aipl.platform.api.dto.response.ApiResponse;
 import com.aipl.platform.engine.EnginePaths;
 import com.aipl.platform.repository.RunRepository;
@@ -30,7 +32,18 @@ public class RunController {
 
     @PostMapping("/runs")
     public ApiResponse<JsonNode> run(@RequestBody RunRequest req) throws Exception {
-        return ApiResponse.ok(runService.run(req.task, req.planId, req.workspace));
+        JsonNode res = runService.run(req.task, req.planId, req.workspace, req.mode, req.policy);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+    @PostMapping("/assistant/confirm")
+    public ApiResponse<JsonNode> assistantConfirm(@RequestBody AssistantConfirmRequest req) throws Exception {
+        String mode = (req.mode == null || req.mode.isBlank()) ? "autopilot" : req.mode;
+        String policy = (req.policy == null || req.policy.isBlank()) ? "guarded" : req.policy;
+        JsonNode res = runService.runPlan(req.planId, req.workspace, mode, policy);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
     }
 
     @GetMapping("/runs")
@@ -40,10 +53,11 @@ public class RunController {
 
     @GetMapping("/runs/{runId}")
     public ApiResponse<JsonNode> status(@PathVariable String runId, @RequestParam(required = false) String planId) throws Exception {
-        return ApiResponse.ok(runService.status(planId, runId));
+        JsonNode res = runService.status(planId, runId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
     }
 
-    
     @GetMapping("/runs/{runId}/events/stream")
     public SseEmitter stream(@PathVariable String runId, @RequestParam(required = false) String planId,
                              @RequestParam(required = false) Integer cursor,
@@ -73,7 +87,7 @@ public class RunController {
                         JsonNode sd = status.get("data");
                         if (sd != null) {
                             String st = sd.get("status").asText("running");
-                            if ("done".equals(st) || "failed".equals(st) || "canceled".equals(st)) {
+                            if ("done".equals(st) || "failed".equals(st) || "canceled".equals(st) || "awaiting_review".equals(st) || "discarded".equals(st)) {
                                 emitter.complete();
                                 break;
                             }
@@ -92,15 +106,18 @@ public class RunController {
     public ApiResponse<JsonNode> events(@PathVariable String runId, @RequestParam(required = false) String planId,
                            @RequestParam(defaultValue = "0") int cursor,
                            @RequestParam(defaultValue = "200") int limit) throws Exception {
-        return ApiResponse.ok(runService.events(planId, runId, cursor, limit));
+        JsonNode res = runService.events(planId, runId, cursor, limit);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
     }
 
     @GetMapping("/runs/{runId}/artifacts")
     public ApiResponse<JsonNode> artifacts(@PathVariable String runId, @RequestParam(required = false) String planId) throws Exception {
-        return ApiResponse.ok(runService.artifacts(planId, runId));
+        JsonNode res = runService.artifacts(planId, runId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
     }
 
-    
     @GetMapping("/runs/{runId}/artifacts/download")
     public ResponseEntity<byte[]> download(@PathVariable String runId, @RequestParam String path, @RequestParam(required = false) String planId) throws Exception {
         Path runDir = paths.resolveRunDir(planId, runId);
@@ -120,7 +137,31 @@ public class RunController {
 
     @PostMapping("/runs/{runId}/cancel")
     public ApiResponse<JsonNode> cancel(@PathVariable String runId, @RequestParam(required = false) String planId) throws Exception {
-        return ApiResponse.ok(runService.cancel(planId, runId));
+        JsonNode res = runService.cancel(planId, runId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+    @PostMapping("/runs/{runId}/apply")
+    public ApiResponse<JsonNode> apply(@PathVariable String runId, @RequestParam(required = false) String planId) throws Exception {
+        JsonNode res = runService.apply(planId, runId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+    @PostMapping("/runs/{runId}/discard")
+    public ApiResponse<JsonNode> discard(@PathVariable String runId, @RequestParam(required = false) String planId) throws Exception {
+        JsonNode res = runService.discard(planId, runId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+
+    @PostMapping("/runs/{runId}/rework")
+    public ApiResponse<JsonNode> rework(@PathVariable String runId, @RequestParam(required = false) String planId, @RequestBody ReworkRequest req) throws Exception {
+        JsonNode res = runService.rework(planId, runId, req.stepId, req.feedback, req.scope);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
     }
 
     @PostMapping("/runs/{runId}/retry")
@@ -130,7 +171,14 @@ public class RunController {
                                        @RequestParam(defaultValue = "false") boolean retryDeps,
                                        @RequestParam(required = false) String retryIdSuffix,
                                        @RequestParam(defaultValue = "false") boolean reuseTaskId) throws Exception {
-        return ApiResponse.ok(runService.retry(planId, runId, force, retryDeps, retryIdSuffix, reuseTaskId));
+        JsonNode res = runService.retry(planId, runId, force, retryDeps, retryIdSuffix, reuseTaskId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+    @DeleteMapping("/runs/{runId}")
+    public ApiResponse<JsonNode> deleteRun(@PathVariable String runId, @RequestParam(required = false) String planId) throws Exception {
+        return ApiResponse.ok(runService.deleteRun(planId, runId));
     }
 
 }

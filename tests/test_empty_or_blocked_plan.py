@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from services import verifier_service
+from services.verifier import VerifierService
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -12,7 +12,7 @@ def test_empty_plan_fails(tmp_path, backlog_task):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     task_id, _ = backlog_task([])
-    passed, reasons = verifier_service.verify_task(REPO_ROOT, run_dir, task_id)
+    passed, reasons = VerifierService(REPO_ROOT).verify_task(run_dir, task_id)
 
     assert passed is False
     assert any(r.get("type") == "no_checks" for r in reasons)
@@ -29,7 +29,7 @@ def test_blocked_plan_rejected(tmp_path, backlog_task, fake_runner):
     checks = [{"type": "command", "cmd": "rm -rf /", "timeout": 1}]
     task_id, _ = backlog_task(checks, workspace=workspace)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is False
     assert fake_runner.calls == []

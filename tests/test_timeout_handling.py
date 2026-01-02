@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from services import verifier_service
+from services.verifier import VerifierService
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +26,7 @@ def test_timeout_sets_structured_fields(tmp_path, backlog_task, fake_runner):
             "timeout_error": "timeout",
         }
     )
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is False
     result = json.loads((run_dir / "verification_result.json").read_text(encoding="utf-8"))

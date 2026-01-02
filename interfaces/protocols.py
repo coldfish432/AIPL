@@ -20,6 +20,10 @@ class IVerifier(Protocol):
     def verify_task(self, run_dir: Path, task_id: str, workspace_path: Path | None = None) -> tuple[bool, list[JsonDict]]:
         ...
 
+    # 收集错误用于返工
+    def collect_errors_for_retry(self, **kwargs) -> Any:
+        ...
+
 
 @runtime_checkable
 class IProfileService(Protocol):

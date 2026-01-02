@@ -98,9 +98,15 @@ def _cleanup_artifacts(plan_id: str) -> None:
     if exec_dir.exists():
         shutil.rmtree(exec_dir, ignore_errors=True)
     if backlog.exists():
-        backlog.unlink()
+        try:
+            backlog.unlink()
+        except Exception:
+            pass
     if plan_tasks.exists():
-        plan_tasks.unlink()
+        try:
+            plan_tasks.unlink()
+        except Exception:
+            pass
 
 
 # test验证循环multi轮次，执行外部命令，解析JSON
@@ -112,6 +118,7 @@ def test_verification_loop_multi_round(temp_workspace, mock_http_server, profile
     env = os.environ.copy()
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
     env["AIPL_DB_PATH"] = str(profile_db)
+    env["AIPL_HTTP_SOFT_FAIL"] = "1"
     env["CODEX_FAKE_HTTP_URL"] = mock_http_server.url
     env["CODEX_FAKE_COUNTER"] = str(bin_dir / "counter.txt")
     env["CODEX_BIN"] = str(bin_dir / ("codex.cmd" if os.name == "nt" else "codex"))

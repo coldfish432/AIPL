@@ -7,6 +7,10 @@ build/
 # Python
 .venv/
 __pycache__/
+*.pyc
+.cache/
+.mypy_cache/
+.ruff_cache/
 
 # IDE
 .idea/
@@ -22,3 +26,16 @@ mini-model-verify/
 demo-workspaces/
 artifacts/
 backlog/
+
+# Temp
+.pytest_cache/
+.tmp_custom/
+ui-electron/.tmp/
+*.pyc
+.cache/
+.mypy_cache/
+.ruff_cache/
+.ui-electron/.tmp/
+
+
+fix

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from services import verifier_service
+from services.verifier import VerifierService
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +30,7 @@ def test_disallowed_commands_rejected(tmp_path, backlog_task, fake_runner, cmd):
     checks = [{"type": "command", "cmd": cmd, "timeout": 1}]
     task_id, _ = backlog_task(checks, workspace=workspace)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is False
     assert fake_runner.calls == []
@@ -48,7 +48,7 @@ def test_cwd_traversal_rejected(tmp_path, backlog_task, fake_runner):
     checks = [{"type": "command", "cmd": "python -m pytest -q", "cwd": "../..", "timeout": 1}]
     task_id, _ = backlog_task(checks, workspace=workspace)
 
-    passed, _ = verifier_service.verify_task(REPO_ROOT, run_dir, task_id, workspace_path=workspace)
+    passed, _ = VerifierService(REPO_ROOT).verify_task(run_dir, task_id, workspace_path=workspace)
 
     assert passed is False
     assert fake_runner.calls == []

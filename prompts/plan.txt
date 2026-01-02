@@ -6,10 +6,12 @@ Constraints:
 - plan_id: {plan_id}
 - At most {max_tasks} subtasks.
 - Use type "time_for_certainty" for every task.
-- Give unique ids (prefix with "{plan_id}-" is fine).
-- Dependencies must reference earlier tasks only.
-- Provide concrete acceptance_criteria that can be checked by simple file existence/contents under run_dir/outputs (artifacts/executions/<plan_id>/runs/<run_id>/outputs).
-- You MUST output machine-verifiable checks. Do NOT use free-form natural language in checks.
+- Give unique step_id values (prefix with "{plan_id}-S" is fine).
+- Dependencies must reference earlier step_id values only.
+- Provide concise title + description.
+- Include "task_chain_text" as plain text task chain (no JSON, no markdown).
+- capabilities must be a list of: read | write | exec | net (multi-select as needed).
+- checks must be machine-verifiable and include at least one of: command/command_contains/http_check.
 - checks must use one or more of: file_exists, file_contains, command, command_contains, json_schema, http_check.
 - file_exists: {{"type":"file_exists","path":"outputs/xxx.txt"}}
 - file_contains: {{"type":"file_contains","path":"outputs/xxx.txt","needle":"keyword"}}
@@ -17,12 +19,12 @@ Constraints:
 - command_contains: {{"type":"command_contains","cmd":"python -m pytest -q","needle":"passed","timeout":300}}
 - json_schema: {{"type":"json_schema","path":"outputs/data.json","schema":{{"type":"object","required":["ok"]}}}}
 - http_check: {{"type":"http_check","url":"http://127.0.0.1:8088/health","expected_status":200,"contains":"ok"}}
-- Titles and acceptance_criteria may use concise Chinese (推荐中文说明/注释) when free text is needed.
-- Use only commands listed in Capabilities -> commands (cmd field). Do not invent commands.
-- checks must include at least one command/command_contains/http_check entry.
-- Hard policy (must obey):
+- Titles and descriptions may use concise Chinese when free text is needed.
+- Prefer commands listed in Capabilities -> commands (cmd field). The platform enforces allow/deny.
+- Do NOT use compound shell commands. Single command only: no ";" "&&" "||" "|" "$(" or backticks.
+- Policy intent (declarative; platform enforces allow/deny):
 {hard_block}
-- Soft profile (reference only, do not override hard rules):
+- Soft profile (reference only):
 {soft_block}
 - Capabilities (discovered commands whitelist):
 {capabilities_block}
@@ -32,16 +34,20 @@ Input task:
 Schema you must follow:
 {{
   "plan_id": "string",
+  "task_chain_text": "string",
   "tasks": [
     {{
-      "id": "string",
+      "step_id": "string",
       "title": "string",
+      "description": "string",
       "type": "time_for_certainty",
       "priority": 0,
       "estimated_minutes": 0,
       "dependencies": ["string"],
-      "acceptance_criteria": ["string"],
-      "checks": [{{"type": "file_exists", "path": "outputs/example.txt"}}]
+      "capabilities": ["read"],
+      "checks": [{{"type": "file_exists", "path": "outputs/example.txt"}}],
+      "artifacts": ["outputs/example.txt"],
+      "acceptance_criteria": ["string"]
     }}
   ]
 }}

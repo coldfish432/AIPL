@@ -1,0 +1,2 @@
+Summary: All tests passed, no errors detected.
+Details: pytest -q succeeded; a cache path warning appeared because .pytest_cache already exists.

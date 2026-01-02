@@ -1,2 +1,0 @@
-﻿add(a, b) 当前逻辑：直接返回 a + b（src/calc.py）。
-相关测试：tests/test_calc.py 中 test_add 断言 add(2, 3) == 5。

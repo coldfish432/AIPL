@@ -38,12 +38,15 @@ DEFAULT_ALLOWED_COMMANDS = _env_list(
     "AIPL_ALLOWED_COMMANDS",
     ["python", "pytest", "mvn", "gradle", "npm", "node", "pnpm", "yarn"],
 )
+DEFAULT_DENY_COMMANDS = []
 DEFAULT_COMMAND_TIMEOUT = _env_int("AIPL_COMMAND_TIMEOUT", 300)
 DEFAULT_MAX_CONCURRENCY = _env_int("AIPL_MAX_CONCURRENCY", 2)
 DEFAULT_DENY_WRITE = _env_list(
     "AIPL_DENY_WRITE",
     [".git", "node_modules", "target", "dist", "build", ".venv", "__pycache__", "artifacts", "runs", "outputs"],
 )
+DEFAULT_POLICY_MODE = os.getenv("AIPL_POLICY_MODE", "report-only").strip().lower()
+POLICY_ENFORCED = DEFAULT_POLICY_MODE in {"enforce", "strict", "block"}
 
 
 # 解析db路径，检查路径是否存在，读取文件内容

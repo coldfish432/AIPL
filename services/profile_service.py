@@ -170,6 +170,12 @@ def _open_profile_db(root: Path) -> sqlite3.Connection | None:
         return None
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
+    try:
+        # 使用内存事务日志，避免在受限文件系统上删除/创建 journal 文件失败
+        conn.execute("PRAGMA journal_mode=MEMORY")
+        conn.execute("PRAGMA temp_store=MEMORY")
+    except Exception:
+        pass
     ensure_profile_tables(conn)
     return conn
 
@@ -314,11 +320,6 @@ def should_propose_on_failure(root: Path, workspace: Path, threshold: int = 2, l
                 for run_dir in runs_dir.iterdir():
                     if run_dir.is_dir():
                         run_dirs.append(run_dir)
-    legacy_runs = root / "artifacts" / "runs"
-    if legacy_runs.exists():
-        for run_dir in legacy_runs.iterdir():
-            if run_dir.is_dir():
-                run_dirs.append(run_dir)
     run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
     checked = 0

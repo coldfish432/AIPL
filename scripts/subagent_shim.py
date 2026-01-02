@@ -6,6 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 import sys
+import threading
 
 
 # extractroot
@@ -23,14 +24,24 @@ ROOT_DIR = ROOT_DIR.resolve()
 sys.path.insert(0, str(ROOT_DIR))
 
 from infra.io_utils import append_jsonl, write_json
+from infra.path_guard import is_workspace_unsafe
 from policy_validator import validate_writes, validate_commands, default_path_rules
 from services.profile_service import ensure_profile, DEFAULT_ALLOWED_COMMANDS, DEFAULT_COMMAND_TIMEOUT, DEFAULT_DENY_WRITE
+from config import POLICY_ENFORCED
 from services.code_graph_service import CodeGraph
 
 
+def _normalize_cmd_path(path: str | Path) -> str:
+    raw = str(path)
+    if os.name == "nt" and raw.startswith("\\\\?\\"):
+        return raw[4:]
+    return raw
+
+
 # 调用 Codex，返回符合 schema 的 JSON 字符串
-def run_codex(prompt: str, root_dir: Path) -> str:
-    """调用 Codex，返回符合 schema 的 JSON 字符串"""
+# Run Codex and return schema JSON
+def run_codex(prompt: str, root_dir: Path, run_dir: Path, round_dir: Path) -> str:
+    """Run Codex and return schema JSON."""
     schema_path = root_dir / "schemas" / "codex_writes.schema.json"
     codex_bin = os.environ.get("CODEX_BIN") or shutil.which("codex")
     if not codex_bin and os.name == "nt":
@@ -38,31 +49,68 @@ def run_codex(prompt: str, root_dir: Path) -> str:
             codex_bin = shutil.which(cand)
             if codex_bin:
                 break
-    codex_bin = codex_bin or "codex"
+    codex_bin = _normalize_cmd_path(codex_bin or "codex")
+    root_arg = _normalize_cmd_path(root_dir)
+    schema_arg = _normalize_cmd_path(schema_path)
+    io_root = root_dir / ".tmp_custom" / "codex_io"
+    io_root.mkdir(parents=True, exist_ok=True)
+    prompt_path = io_root / "writes_prompt.txt"
+    output_path = io_root / "writes_output.json"
+    error_path = io_root / "writes_error.log"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    status_path = round_dir / "codex_status.txt"
+    hb_path = round_dir / "codex_heartbeat.txt"
+    status_path.write_text("Codex start: preparing request", encoding="utf-8")
     cmd = [
         codex_bin, "exec",
         "--full-auto",
         "--sandbox", "workspace-write",
-        "-C", str(root_dir),
+        "-C", root_arg,
         "--skip-git-repo-check",
-        "--output-schema", str(schema_path),
+        "--output-schema", schema_arg,
         "--color", "never",
     ]
-    result = subprocess.run(
-        cmd,
-        input=prompt,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        shell=False,
-    )
+    stop_event = threading.Event()
+
+    def _heartbeat():
+        while not stop_event.is_set():
+            try:
+                hb_path.write_text(f"heartbeat: {time.time()}", encoding="utf-8")
+            except Exception:
+                pass
+            stop_event.wait(5)
+
+    hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+    hb_thread.start()
+    status_path.write_text("Codex start: running subprocess", encoding="utf-8")
+    append_jsonl(run_dir / "events.jsonl", {"type": "codex_start", "ts": time.time(), "round_dir": str(round_dir)})
+    try:
+        with prompt_path.open("r", encoding="utf-8") as stdin, output_path.open("w", encoding="utf-8") as stdout, error_path.open(
+            "w", encoding="utf-8"
+        ) as stderr:
+            result = subprocess.run(
+                cmd,
+                stdin=stdin,
+                stdout=stdout,
+                stderr=stderr,
+                shell=False,
+                timeout=600,
+            )
+    except subprocess.TimeoutExpired:
+        status_path.write_text("Codex timeout: exceeded 600s waiting for response", encoding="utf-8")
+        append_jsonl(run_dir / "events.jsonl", {"type": "codex_timeout", "ts": time.time(), "round_dir": str(round_dir)})
+        raise RuntimeError("Codex timeout: exceeded 600s waiting for response")
+    finally:
+        stop_event.set()
     if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "codex failed").strip())
-    return result.stdout
-
-
-# 加载任务spec，解析JSON，检查路径是否存在
+        err = error_path.read_text(encoding="utf-8", errors="replace") if error_path.exists() else ""
+        out = output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
+        status_path.write_text("Codex failed: non-zero exit", encoding="utf-8")
+        append_jsonl(run_dir / "events.jsonl", {"type": "codex_failed", "ts": time.time(), "round_dir": str(round_dir)})
+        raise RuntimeError((err or out or "codex failed").strip())
+    status_path.write_text("Codex done: response received", encoding="utf-8")
+    append_jsonl(run_dir / "events.jsonl", {"type": "codex_done", "ts": time.time(), "round_dir": str(round_dir)})
+    return output_path.read_text(encoding="utf-8", errors="replace")
 def load_task_spec(root: Path, task_id: str) -> dict:
     backlog_dir = root / "backlog"
     if not backlog_dir.exists():
@@ -209,7 +257,14 @@ def is_allowed(path: Path, allowlist: list[str], denylist: list[str]) -> bool:
 
 
 # applywrites，写入文件内容，创建目录
-def apply_writes(run_dir: Path, workspace: Path, writes: list[dict], allow_write: list[str], deny_write: list[str]) -> tuple[list[str], list[dict]]:
+def apply_writes(
+    run_dir: Path,
+    workspace: Path,
+    writes: list[dict],
+    allow_write: list[str],
+    deny_write: list[str],
+    enforce_policy: bool,
+) -> tuple[list[str], list[dict]]:
     produced = []
     skipped = []
     for w in writes:
@@ -221,7 +276,10 @@ def apply_writes(run_dir: Path, workspace: Path, writes: list[dict], allow_write
                 skipped.append({"path": rel_path, "reason": "workspace_outputs_disabled"})
                 continue
             dest = resolve_under(workspace, rel_path)
-            if not dest or not is_allowed(dest.relative_to(workspace), allow_write, deny_write):
+            if not dest:
+                skipped.append({"path": rel_path, "reason": "invalid_workspace_path"})
+                continue
+            if enforce_policy and not is_allowed(dest.relative_to(workspace), allow_write, deny_write):
                 skipped.append({"path": rel_path, "reason": "not_allowed"})
                 continue
         else:
@@ -236,7 +294,13 @@ def apply_writes(run_dir: Path, workspace: Path, writes: list[dict], allow_write
 
 
 # 执行允许的命令，cwd=workspace。commands 可以是字符串或 {cmd, timeout}
-def run_commands(workspace: Path, commands, timeout_default: int = 300, allowed_prefix: tuple[str, ...] = tuple(DEFAULT_ALLOWED_COMMANDS)) -> tuple[list[dict], bool]:
+def run_commands(
+    workspace: Path,
+    commands,
+    timeout_default: int = 300,
+    allowed_prefix: tuple[str, ...] = tuple(DEFAULT_ALLOWED_COMMANDS),
+    enforce_policy: bool = True,
+) -> tuple[list[dict], bool]:
     """
     执行允许的命令，cwd=workspace。commands 可以是字符串或 {cmd, timeout}。
     白名单前缀：python / pytest / mvn / gradle / npm / node / pnpm / yarn
@@ -254,7 +318,8 @@ def run_commands(workspace: Path, commands, timeout_default: int = 300, allowed_
             timeout = timeout_default
         if not cmd_str:
             continue
-        if not cmd_str.startswith(allowed_prefix):
+        allowed = cmd_str.startswith(allowed_prefix)
+        if enforce_policy and not allowed:
             logs.append({"cmd": cmd_str, "status": "skipped", "reason": "not_allowed_prefix"})
             all_passed = False
             continue
@@ -274,6 +339,7 @@ def run_commands(workspace: Path, commands, timeout_default: int = 300, allowed_
                 "returncode": result.returncode,
                 "stdout": (result.stdout or "")[:2000],
                 "stderr": (result.stderr or "")[:2000],
+                "policy_allowed": allowed,
             }
             logs.append(log)
             if result.returncode != 0:
@@ -294,6 +360,7 @@ def parse_args():
     parser.add_argument("round_id")
     parser.add_argument("mode")
     parser.add_argument("--workspace", help="目标 workspace 路径（若缺省则尝试 backlog.task.workspace.path）")
+    parser.add_argument("--workspace-main", help="主 workspace 路径（用于 profile/策略）")
     return parser.parse_args()
 
 
@@ -317,6 +384,7 @@ def main():
     checks = task_spec.get("checks", [])
 
     workspace_path = Path(args.workspace) if args.workspace else None
+    workspace_main_path = Path(args.workspace_main) if args.workspace_main else None
     if not workspace_path and isinstance(task_spec.get("workspace"), dict):
         wpath = task_spec["workspace"].get("path")
         if wpath:
@@ -324,6 +392,11 @@ def main():
     if not workspace_path:
         raise RuntimeError("workspace path is required (use --workspace or task.workspace.path)")
     workspace_path = workspace_path.resolve()
+    if not workspace_main_path:
+        workspace_main_path = workspace_path
+    workspace_main_path = workspace_main_path.resolve()
+    if is_workspace_unsafe(root, workspace_main_path):
+        raise RuntimeError(f"workspace path {workspace_main_path} includes engine root {root}")
     allow_write = []
     deny_write = list(DEFAULT_DENY_WRITE)
     allowed_commands = list(DEFAULT_ALLOWED_COMMANDS)
@@ -344,7 +417,7 @@ def main():
             pass
     if "outputs" not in deny_write:
         deny_write.append("outputs")
-    profile = ensure_profile(root, workspace_path)
+    profile = ensure_profile(root, workspace_main_path)
     effective_hard = profile.get("effective_hard") or {}
     allow_write = effective_hard.get("allow_write", allow_write) or allow_write
     deny_write = effective_hard.get("deny_write", deny_write) or deny_write
@@ -421,17 +494,30 @@ def main():
         soft_block=soft_block,
     )
 
-    raw = run_codex(prompt, root).strip()
+    raw = run_codex(prompt, root, run_dir, round_dir).strip()
     plan = json.loads(raw)
     writes = plan.get("writes", [])
-    cleaned_writes, write_reasons = validate_writes(writes, allow_write, deny_write)
-    produced_paths, skipped_writes = apply_writes(run_dir, workspace_path, cleaned_writes, allow_write, deny_write)
+    cleaned_writes, write_reasons = validate_writes(writes, allow_write, deny_write, enforce_policy=POLICY_ENFORCED)
+    produced_paths, skipped_writes = apply_writes(
+        run_dir,
+        workspace_path,
+        cleaned_writes,
+        allow_write,
+        deny_write,
+        enforce_policy=POLICY_ENFORCED,
+    )
 
     cmd_logs = []
     cmds = plan.get("commands", [])
-    cleaned_cmds, command_reasons = validate_commands(cmds, allowed_commands, command_timeout)
+    cleaned_cmds, command_reasons = validate_commands(cmds, allowed_commands, command_timeout, enforce_policy=POLICY_ENFORCED)
     if cleaned_cmds:
-        cmd_logs, cmds_ok = run_commands(workspace_path, cleaned_cmds, timeout_default=command_timeout, allowed_prefix=tuple(allowed_commands))
+        cmd_logs, cmds_ok = run_commands(
+            workspace_path,
+            cleaned_cmds,
+            timeout_default=command_timeout,
+            allowed_prefix=tuple(allowed_commands),
+            enforce_policy=POLICY_ENFORCED,
+        )
     else:
         cmds_ok = True
 

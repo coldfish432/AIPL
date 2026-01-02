@@ -6,9 +6,11 @@ import java.util.List;
 public class EngineCommandBuilder {
     private final List<String> args = new ArrayList<>();
 
-    public EngineCommandBuilder(String baseCommand) {
+    public EngineCommandBuilder(String baseCommand, String root) {
         args.add("python");
         args.add("engine_cli.py");
+        args.add("--root");
+        args.add(root);
         args.add(baseCommand);
     }
 

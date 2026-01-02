@@ -4,4 +4,6 @@ public class PlanRequest {
     public String task;
     public String planId;
     public String workspace;
+    public String mode;
+    public String policy;
 }

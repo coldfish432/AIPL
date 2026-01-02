@@ -1,11 +1,17 @@
+D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\AssistantController.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\HealthController.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\JobController.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\PlanController.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\ProfileController.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\RunController.java
+D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\AssistantChatMessage.java
+D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\AssistantChatRequest.java
+D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\AssistantConfirmRequest.java
+D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\AssistantPlanRequest.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\JobRequest.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\PlanRequest.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\ProfileRequest.java
+D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\ReworkRequest.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\RunRequest.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\response\ApiResponse.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\exception\BusinessException.java
@@ -21,6 +27,7 @@ D:\AIPL\server\src\main\java\com\aipl\platform\PlatformApplication.java
 D:\AIPL\server\src\main\java\com\aipl\platform\repository\JobRepository.java
 D:\AIPL\server\src\main\java\com\aipl\platform\repository\PlanRepository.java
 D:\AIPL\server\src\main\java\com\aipl\platform\repository\RunRepository.java
+D:\AIPL\server\src\main\java\com\aipl\platform\service\AssistantService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\JobService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\PlanService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\ProfileService.java

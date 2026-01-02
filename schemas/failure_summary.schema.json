@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary_zh": { "type": "string" },
+    "details_zh": { "type": "string" }
+  },
+  "required": ["summary_zh"]
+}

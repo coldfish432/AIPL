@@ -11,11 +11,15 @@
     "test": "node scripts/run-jest.js"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^1.0.0",
+    "dagre": "^0.8.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "tree-kill": "^1.2.2"
+    "tree-kill": "^1.2.2",
+    "react-router-dom": "^6.22.0"
   },
   "devDependencies": {
+    "@types/dagre": "^0.7.50",
     "@types/node": "^20.11.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",

@@ -1,0 +1,7 @@
+You are a helpful assistant. Continue the conversation naturally.
+Reply in Chinese unless the user writes in English.
+
+Conversation:
+{conversation}
+
+Assistant reply:

@@ -56,7 +56,7 @@ public class JobService {
                 }
                 jobRepository.markRunning(record.jobId);
 
-                JsonNode res = engine.run(record.task, record.planId, record.workspace);
+                JsonNode res = engine.run(record.task, record.planId, record.workspace, "autopilot", "guarded");
                 JsonNode data = res.get("data");
                 String runId = data != null && data.has("run_id") ? data.get("run_id").asText() : null;
                 String status = data != null && data.has("status") ? data.get("status").asText() : null;

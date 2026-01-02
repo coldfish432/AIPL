@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -56,9 +57,12 @@ public class RunRepository {
             return List.of();
         }
         List<JsonNode> items = new ArrayList<>();
-        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
-             PreparedStatement stmt = conn.prepareStatement("SELECT run_id, plan_id, status, updated_at, raw_json FROM runs ORDER BY updated_at DESC")) {
-            try (ResultSet rs = stmt.executeQuery()) {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            try (Statement init = conn.createStatement()) {
+                init.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, plan_id TEXT, status TEXT, updated_at INTEGER, raw_json TEXT)");
+            }
+            try (PreparedStatement stmt = conn.prepareStatement("SELECT run_id, plan_id, status, updated_at, raw_json FROM runs ORDER BY updated_at DESC");
+                 ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String runId = rs.getString("run_id");
                     String planId = rs.getString("plan_id");
@@ -91,5 +95,45 @@ public class RunRepository {
             }
         }
         return items;
+    }
+
+    public void deleteRun(String runId) throws Exception {
+        if (runId == null || runId.isBlank() || dbPath == null) {
+            return;
+        }
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            try (Statement init = conn.createStatement()) {
+                init.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, plan_id TEXT, status TEXT, updated_at INTEGER, raw_json TEXT)");
+                init.execute("CREATE TABLE IF NOT EXISTS event_cursors (run_id TEXT PRIMARY KEY, cursor INTEGER, updated_at INTEGER)");
+            }
+            try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM event_cursors WHERE run_id=?")) {
+                stmt.setString(1, runId);
+                stmt.executeUpdate();
+            }
+            try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM runs WHERE run_id=?")) {
+                stmt.setString(1, runId);
+                stmt.executeUpdate();
+            }
+        }
+    }
+
+    public void deleteRunsByPlan(String planId) throws Exception {
+        if (planId == null || planId.isBlank() || dbPath == null) {
+            return;
+        }
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            try (Statement init = conn.createStatement()) {
+                init.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, plan_id TEXT, status TEXT, updated_at INTEGER, raw_json TEXT)");
+                init.execute("CREATE TABLE IF NOT EXISTS event_cursors (run_id TEXT PRIMARY KEY, cursor INTEGER, updated_at INTEGER)");
+            }
+            try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM event_cursors WHERE run_id IN (SELECT run_id FROM runs WHERE plan_id=?)")) {
+                stmt.setString(1, planId);
+                stmt.executeUpdate();
+            }
+            try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM runs WHERE plan_id=?")) {
+                stmt.setString(1, planId);
+                stmt.executeUpdate();
+            }
+        }
     }
 }

@@ -35,6 +35,14 @@ function resolveEngineRoot(resourcesRoot: string): string {
   return path.resolve(app.getAppPath(), "..");
 }
 
+function resolveDbPath(resourcesRoot: string): string {
+  if (app.isPackaged) {
+    return path.join(resourcesRoot, "data", "aipl.db");
+  }
+  const repoRoot = path.resolve(app.getAppPath(), "..");
+  return path.join(repoRoot, "server", "data", "aipl.db");
+}
+
 function checkHealth(): Promise<boolean> {
   return new Promise((resolve) => {
     const req = http.get(`${getBaseUrl()}/health`, (res) => {
@@ -95,11 +103,18 @@ export class ServerManager {
 
     const javaExe = resolveJavaExecutable(resourcesRoot);
     const engineRoot = resolveEngineRoot(resourcesRoot);
+    const dbPath = resolveDbPath(resourcesRoot);
     const logPath = getLogPath();
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     const logFd = fs.openSync(logPath, "a");
 
-    javaProcess = spawn(javaExe, ["-jar", jarPath, `--server.port=${AppConfig.javaPort}`, `--app.engineRoot=${engineRoot}`], {
+    javaProcess = spawn(javaExe, [
+      "-jar",
+      jarPath,
+      `--server.port=${AppConfig.javaPort}`,
+      `--app.engineRoot=${engineRoot}`,
+      `--app.dbPath=${dbPath}`,
+    ], {
       cwd: resourcesRoot,
       stdio: ["ignore", logFd, logFd],
       windowsHide: true,

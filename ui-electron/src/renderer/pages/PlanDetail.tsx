@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import { deletePlan, getPlan, PlanDetailResponse, PlanTask } from "../apiClient";
 import TaskGraph from "../components/TaskGraph";
+import { useI18n } from "../lib/useI18n";
 
 type Props = {
   planId: string;
@@ -13,6 +14,7 @@ function formatDeps(deps: string[] | undefined) {
 }
 
 export default function PlanDetail({ planId, onBack }: Props) {
+  const { t } = useI18n();
   const [planData, setPlanData] = useState<PlanDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,15 +27,15 @@ export default function PlanDetail({ planId, onBack }: Props) {
       const data = await getPlan(planId);
       setPlanData(data);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "加载计划失败";
-      setError(message || "加载计划失败");
+      const message = err instanceof Error ? err.message : t.messages.loadPlanFailed;
+      setError(message || t.messages.loadPlanFailed);
     } finally {
       setLoading(false);
     }
   }
 
   async function handleDeletePlan() {
-    if (!window.confirm("确认删除这个 plan 吗？相关 runs 和 artifacts 也会被删除。")) {
+    if (!window.confirm(t.messages.confirmDeletePlan)) {
       return;
     }
     setLoading(true);
@@ -42,8 +44,8 @@ export default function PlanDetail({ planId, onBack }: Props) {
       await deletePlan(planId);
       onBack();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "删除计划失败";
-      setError(message || "删除计划失败");
+      const message = err instanceof Error ? err.message : t.messages.deleteFailed;
+      setError(message || t.messages.deleteFailed);
     } finally {
       setLoading(false);
     }
@@ -62,56 +64,57 @@ export default function PlanDetail({ planId, onBack }: Props) {
   return (
     <section className="stack">
       <div className="row">
-        <button onClick={onBack}>返回</button>
-        <button onClick={load} disabled={loading}>{loading ? "加载中..." : "刷新"}</button>
-        <button onClick={handleDeletePlan} disabled={loading}>删除计划</button>
+        <button onClick={onBack}>{t.buttons.back}</button>
+        <button onClick={load} disabled={loading}>{loading ? t.messages.loading : t.buttons.refresh}</button>
+        <button onClick={handleDeletePlan} disabled={loading}>{t.buttons.deletePlan}</button>
         {error && <span className="error">{error}</span>}
       </div>
       <div className="grid">
         <div className="card">
-          <h2>计划信息</h2>
+          <h2>{t.titles.planInfo}</h2>
           <div className="list">
             <div className="list-item">
-              <div className="title">计划 ID</div>
+              <div className="title">{t.labels.planId}</div>
               <div className="meta">{planId}</div>
             </div>
             <div className="list-item">
-              <div className="title">输入任务</div>
+              <div className="title">{t.labels.inputTask}</div>
               <div className="meta">{planInfo?.input_task || planInfo?.inputTask || "-"}</div>
             </div>
           </div>
         </div>
         <div className="card">
           <div className="row">
-            <h2>任务链</h2>
+            <h2>{t.titles.taskChain}</h2>
             <div className="mode-toggle">
               <button className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>
-                列表
+                {t.labels.listView}
               </button>
               <button className={viewMode === "graph" ? "active" : ""} onClick={() => setViewMode("graph")}>
-                图形
+                {t.labels.graphView}
               </button>
             </div>
           </div>
           {viewMode === "list" ? (
             <div className="list">
-              {tasks.length === 0 && <div className="muted">暂无任务数据。</div>}
+              {tasks.length === 0 && <div className="muted">{t.messages.taskChainEmptyData}</div>}
               {tasks.map((task: PlanTask, idx: number) => {
                 const taskId = task.step_id || task.id || task.task_id || `task-${idx + 1}`;
-                const title = task.title || task.name || `任务 ${idx + 1}`;
-                const status = task.status || "pending";
+                const title = task.title || task.name || `${t.labels.task} ${idx + 1}`;
+                const status = String(task.status || "pending").toLowerCase();
+                const statusLabel = t.status[status as keyof typeof t.status] || status;
                 return (
                   <div key={taskId} className="list-item task-item">
                     <div>
                       <div className="title">{title}</div>
-                      <div className="meta">id {taskId}</div>
+                      <div className="meta">{t.labels.taskId} {taskId}</div>
                       {task.description && <div className="meta">{task.description}</div>}
-                      <div className="meta">依赖 {formatDeps(task.dependencies)}</div>
+                      <div className="meta">{t.labels.dependencies} {formatDeps(task.dependencies)}</div>
                       {task.capabilities && task.capabilities.length > 0 && (
-                        <div className="meta">能力 {task.capabilities.join(", ")}</div>
+                        <div className="meta">{t.labels.capabilities} {task.capabilities.join(", ")}</div>
                       )}
                     </div>
-                    <div className={`pill ${status}`}>{status}</div>
+                    <div className={`pill ${status}`}>{statusLabel}</div>
                   </div>
                 );
               })}
@@ -122,8 +125,8 @@ export default function PlanDetail({ planId, onBack }: Props) {
         </div>
       </div>
       <div className="card">
-        <h2>计划文本</h2>
-        <pre className="pre">{planText || "暂无计划文本。"}</pre>
+        <h2>{t.titles.planText}</h2>
+        <pre className="pre">{planText || t.messages.planEmpty}</pre>
       </div>
     </section>
   );

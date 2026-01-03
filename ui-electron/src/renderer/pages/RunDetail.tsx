@@ -4,6 +4,8 @@ import {
   cancelRun,
   deleteRun,
   discardRun,
+  getRunEvents,
+  openRunFile,
   reworkRun,
   retryRun,
   RetryOptions,
@@ -17,19 +19,20 @@ import {
   RunEvent
 } from "../apiClient";
 import EventTimeline from "../components/EventTimeline";
-import ProgressPanel from "../components/ProgressPanel";
 import VerificationReasons, { VerificationReason } from "../components/VerificationReasons";
 import DiffViewer from "../components/DiffViewer";
+import RunActionBar from "./run-detail/RunActionBar";
+import RunInfoCard from "./run-detail/RunInfoCard";
 import {
   StreamState,
   extractEvents,
   formatEventType,
   getEventKey,
-  getEventLevel,
   getEventStepId
 } from "../lib/events";
-import { computeProgress } from "../lib/progress";
-import { getStatusClassName, getStatusDisplayText, needsReview, resolveStatus } from "../lib/status";
+import { getStatusDisplayText, needsReview, resolveStatus, UnifiedStatus } from "../lib/status";
+import { useI18n } from "../lib/useI18n";
+import { usePlanLock } from "../hooks/usePlanLock";
 
 type Props = {
   runId: string;
@@ -59,48 +62,42 @@ function formatUpdated(updated: unknown) {
   return String(updated);
 }
 
-function describeWorkflowStage(events: RunEvent[], status: { execution: string; review: string | null }): string {
-  if (needsReview(status)) return "等待审核（补丁集已就绪）";
-  if (status.execution === "failed") return "执行失败";
-  if (status.execution === "canceled") return "已取消";
-  if (status.execution === "discarded") return "已丢弃";
-  if (status.execution === "completed") return "已完成";
+function describeWorkflowStage(events: RunEvent[], status: UnifiedStatus, labels: Record<string, string>): string {
+  if (needsReview(status)) return labels.awaitingReviewReady;
+  if (status.execution === "failed") return labels.runFailed;
+  if (status.execution === "canceled") return labels.runCanceled;
+  if (status.execution === "discarded") return labels.runDiscarded;
+  if (status.execution === "completed") return labels.runCompleted;
 
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const evt = events[i];
     const type = formatEventType(evt);
-    if (type === "codex_timeout") return "Codex 超时";
-    if (type === "codex_failed") return "Codex 失败";
-    if (type === "codex_start") return "Codex 生成中";
-    if (type === "codex_done") return "Codex 已响应";
-    if (type === "subagent_start") return "子代理运行中";
-    if (type === "subagent_done") return "验证器运行中";
-    if (type === "step_round_verified") return "验证完成";
-    if (type === "workspace_stage_ready") return "Stage 工作区就绪";
-    if (type === "run_init") return "执行初始化";
-    if (type === "patchset_ready") return "补丁集就绪";
-    if (type === "awaiting_review") return "等待审核";
-    if (type === "apply_start") return "正在应用变更";
-    if (type === "apply_done") return "变更已应用";
-    if (type === "discard_done") return "变更已丢弃";
-    if (type === "run_done") return "执行完成";
+    if (type === "codex_timeout") return labels.codexTimeout;
+    if (type === "codex_failed") return labels.codexFailed;
+    if (type === "codex_start") return labels.codexStart;
+    if (type === "codex_done") return labels.codexDone;
+    if (type === "subagent_start") return labels.subagentStart;
+    if (type === "subagent_done") return labels.subagentDone;
+    if (type === "step_round_verified") return labels.verificationDone;
+    if (type === "workspace_stage_ready") return labels.stageReady;
+    if (type === "run_init") return labels.runInit;
+    if (type === "patchset_ready") return labels.patchsetReady;
+    if (type === "awaiting_review") return labels.awaitingReview;
+    if (type === "apply_start") return labels.applyStart;
+    if (type === "apply_done") return labels.applyDone;
+    if (type === "discard_done") return labels.discardDone;
+    if (type === "run_done") return labels.runDone;
     if (type === "step_round_start") {
       const round = (evt as { round?: number | string }).round;
-      return round !== undefined ? `步骤轮次 ${round}` : "步骤轮次进行中";
+      return round !== undefined ? `${labels.stepRound} ${round}` : labels.stepRoundRunning;
     }
   }
-  return "运行中";
-}
-
-function progressFromStatus(status: { execution: string; review: string | null }): number {
-  if (needsReview(status)) return 90;
-  if (status.execution === "completed") return 100;
-  if (["failed", "canceled", "discarded"].includes(status.execution)) return 100;
-  if (["running", "starting", "queued", "retrying"].includes(status.execution)) return 20;
-  return 0;
+  return labels.running;
 }
 
 export default function RunDetail({ runId, planId, onBack }: Props) {
+  const { language, t } = useI18n();
+  const { removePendingReview } = usePlanLock();
   const [run, setRun] = useState<RunDetailResponse | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -136,8 +133,30 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
         const data = await getRun(runId, planId);
         setRun(data);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "加载执行失败";
-        setError(message || "加载执行失败");
+        const message = err instanceof Error ? err.message : t.messages.loadRunFailed;
+        setError(message || t.messages.loadRunFailed);
+      }
+    })();
+
+    void (async () => {
+      try {
+        const history = await getRunEvents(runId, planId, 0, 500);
+        const next = extractEvents(history as unknown);
+        if (!Array.isArray(next) || next.length === 0) return;
+        setEvents(() => {
+          const merged: RunEvent[] = [];
+          const seen = new Set<string>();
+          for (const item of next) {
+            const key = getEventKey(item);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            merged.push(item);
+          }
+          seenRef.current = seen;
+          return merged;
+        });
+      } catch {
+        // ignore history fetch errors
       }
     })();
 
@@ -201,12 +220,39 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
     [rawStatus, planTasks]
   );
   const normalizedStatus = unifiedStatus.execution;
-  const statusText = getStatusDisplayText(unifiedStatus);
-  const progress = useMemo(
-    () => Math.max(computeProgress(events), progressFromStatus(unifiedStatus)),
-    [events, unifiedStatus]
+  const statusText =
+    (unifiedStatus.execution === "completed" && unifiedStatus.review
+      ? t.status[unifiedStatus.review]
+      : t.status[unifiedStatus.execution]) || getStatusDisplayText(unifiedStatus);
+  const workflowStage = useMemo(
+    () =>
+      describeWorkflowStage(events, unifiedStatus, {
+        awaitingReviewReady: t.messages.awaitingReviewReady,
+        runFailed: t.messages.runFailed,
+        runCanceled: t.messages.runCanceled,
+        runDiscarded: t.messages.runDiscarded,
+        runCompleted: t.messages.runCompleted,
+        codexTimeout: t.messages.codexTimeout,
+        codexFailed: t.messages.codexFailed,
+        codexStart: t.messages.codexStart,
+        codexDone: t.messages.codexDone,
+        subagentStart: t.messages.subagentStart,
+        subagentDone: t.messages.subagentDone,
+        verificationDone: t.messages.verificationDone,
+        stageReady: t.messages.stageReady,
+        runInit: t.messages.runInit,
+        patchsetReady: t.messages.patchsetReady,
+        awaitingReview: t.messages.awaitingReview,
+        applyStart: t.messages.applyStart,
+        applyDone: t.messages.applyDone,
+        discardDone: t.messages.discardDone,
+        runDone: t.messages.runDone,
+        stepRound: t.messages.stepRound,
+        stepRoundRunning: t.messages.stepRoundRunning,
+        running: t.messages.running
+      }),
+    [events, unifiedStatus, t]
   );
-  const workflowStage = useMemo(() => describeWorkflowStage(events, unifiedStatus), [events, unifiedStatus]);
   const currentStep = useMemo(() => {
     for (let i = events.length - 1; i >= 0; i -= 1) {
       const stepId = getEventStepId(events[i]);
@@ -214,9 +260,6 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
     }
     return "step-01";
   }, [events]);
-  const latestEvents = useMemo(() => events.slice(-5).reverse(), [events]);
-  const warningCount = useMemo(() => events.filter((evt) => getEventLevel(evt) === "warning").length, [events]);
-  const errorCount = useMemo(() => events.filter((evt) => getEventLevel(evt) === "error").length, [events]);
   const awaitingReview = needsReview(unifiedStatus);
   const failed = normalizedStatus === "failed";
   const isRunning = normalizedStatus === "running" || normalizedStatus === "starting";
@@ -243,8 +286,8 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
           setPlanTasks(nextTasks);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "加载计划失败";
-        if (active) setPlanError(message || "加载计划失败");
+        const message = err instanceof Error ? err.message : t.messages.loadPlanFailed;
+        if (active) setPlanError(message || t.messages.loadPlanFailed);
       } finally {
         if (active) setPlanLoading(false);
       }
@@ -298,8 +341,8 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
           }
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "加载补丁集失败";
-        if (active) setReviewError(message || "加载补丁集失败");
+        const message = err instanceof Error ? err.message : t.messages.loadPatchsetFailed;
+        if (active) setReviewError(message || t.messages.loadPatchsetFailed);
       } finally {
         if (active) setReviewLoading(false);
       }
@@ -324,7 +367,9 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
         const items = artifacts.items || [];
         const reportPath = items.find((item) => item.path.endsWith("verification_report.md"))?.path;
         const resultPath = items.find((item) => item.path.endsWith("verification_result.json"))?.path;
-        const summaryPath = items.find((item) => item.path.endsWith("failure_reason_zh.txt"))?.path;
+        const summaryPath = items.find((item) =>
+          item.path.endsWith(language === "en" ? "failure_reason_en.txt" : "failure_reason_zh.txt")
+        )?.path;
         let reportText = "";
         let reasonsList: VerificationReason[] = [];
         let summaryText = "";
@@ -348,8 +393,8 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
           });
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "加载失败详情失败";
-        if (active) setFailureError(message || "加载失败详情失败");
+        const message = err instanceof Error ? err.message : t.messages.loadFailureDetailFailed;
+        if (active) setFailureError(message || t.messages.loadFailureDetailFailed);
       }
     })();
     return () => {
@@ -359,34 +404,35 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
 
   function handleInlineRework(stepId: string | null) {
     if (!stepId) {
-      setInlineNotice("获取到步骤 ID 后才能返工。");
+      setInlineNotice(t.messages.reworkNeedStep);
       return;
     }
-    setInlineNotice(`已为 ${stepId} 准备返工，请在返工面板提交。`);
-    setReworkFeedback((prev) => prev || `请求返工：${stepId}。`);
+    setInlineNotice(t.messages.reworkPrepared.replace("{stepId}", stepId));
+    setReworkFeedback((prev) => prev || `${t.buttons.rework}: ${stepId}`);
   }
 
   async function handleApply() {
     setActionLoading(true);
     setReviewError(null);
     try {
-      if (!window.confirm("确认通过审核并应用到目标目录吗？")) {
+      if (!window.confirm(t.messages.confirmApply)) {
         setActionLoading(false);
         return;
       }
       await applyRun(runId, planId);
+      removePendingReview(runId);
       const refreshed = await getRun(runId, planId);
       setRun(refreshed);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "应用失败";
-      setReviewError(message || "应用失败");
+      const message = err instanceof Error ? err.message : t.messages.applyFailed;
+      setReviewError(message || t.messages.applyFailed);
     } finally {
       setActionLoading(false);
     }
   }
 
   async function handleDeleteRun() {
-    if (!window.confirm("确认删除这个 run 吗？相关 artifacts 也会被删除。")) {
+    if (!window.confirm(t.messages.confirmDeleteRun)) {
       return;
     }
     setActionLoading(true);
@@ -395,15 +441,15 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
       await deleteRun(runId, planId);
       onBack();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "删除失败";
-      setReviewError(message || "删除失败");
+      const message = err instanceof Error ? err.message : t.messages.deleteFailed;
+      setReviewError(message || t.messages.deleteFailed);
     } finally {
       setActionLoading(false);
     }
   }
 
   async function handleCancel() {
-    if (!window.confirm("确认取消当前执行吗？")) return;
+    if (!window.confirm(t.messages.confirmCancelRun)) return;
     setActionLoading(true);
     setReviewError(null);
     try {
@@ -411,8 +457,8 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
       const refreshed = await getRun(runId, planId);
       setRun(refreshed);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "取消失败";
-      setReviewError(message || "取消失败");
+      const message = err instanceof Error ? err.message : t.messages.cancelFailed;
+      setReviewError(message || t.messages.cancelFailed);
     } finally {
       setActionLoading(false);
     }
@@ -432,8 +478,8 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
         setRun(refreshed);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "重试失败";
-      setReviewError(message || "重试失败");
+      const message = err instanceof Error ? err.message : t.messages.retryFailed;
+      setReviewError(message || t.messages.retryFailed);
     } finally {
       setActionLoading(false);
     }
@@ -447,8 +493,8 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
       const refreshed = await getRun(runId, planId);
       setRun(refreshed);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "返工失败";
-      setReviewError(message || "返工失败");
+      const message = err instanceof Error ? err.message : t.messages.reworkFailed;
+      setReviewError(message || t.messages.reworkFailed);
     } finally {
       setActionLoading(false);
     }
@@ -459,87 +505,60 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
     setReviewError(null);
     try {
       await discardRun(runId, planId);
+      removePendingReview(runId);
       const refreshed = await getRun(runId, planId);
       setRun(refreshed);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "丢弃失败";
-      setReviewError(message || "丢弃失败");
+      const message = err instanceof Error ? err.message : t.messages.discardFailed;
+      setReviewError(message || t.messages.discardFailed);
     } finally {
       setActionLoading(false);
     }
   }
 
+  async function handleOpenChangedFile(filePath: string) {
+    setReviewError(null);
+    try {
+      await openRunFile(runId, filePath, planId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t.messages.openFileFailed;
+      setReviewError(message || t.messages.openFileFailed);
+    }
+  }
+
   return (
     <section className="stack">
-      <div className="row">
-        <button onClick={onBack}>返回</button>
-        <button onClick={handleDeleteRun} disabled={actionLoading}>删除执行</button>
-        {isRunning && (
-          <button onClick={handleCancel} disabled={actionLoading} className="danger">
-            取消执行
-          </button>
-        )}
-        {canRetry && (
-          <div className="dropdown">
-            <button onClick={() => setRetryMenuOpen((prev) => !prev)} disabled={actionLoading}>
-              重试 ▾
-            </button>
-            {retryMenuOpen && (
-              <div className="dropdown-menu">
-                <button onClick={() => handleRetry()}>快速重试</button>
-                <button onClick={() => handleRetry({ retryDeps: true })}>重试并包含依赖</button>
-                <button onClick={() => handleRetry({ force: true })}>强制重试</button>
-              </div>
-            )}
-          </div>
-        )}
-        <span className={`pill ${streamState}`}>流 {streamState}</span>
-        {error && <span className="error">{error}</span>}
-        {inlineNotice && <span className="muted">{inlineNotice}</span>}
-      </div>
+      <RunActionBar
+        onBack={onBack}
+        onDeleteRun={handleDeleteRun}
+        onCancel={handleCancel}
+        onRetry={handleRetry}
+        actionLoading={actionLoading}
+        isRunning={isRunning}
+        canRetry={canRetry}
+        retryMenuOpen={retryMenuOpen}
+        onToggleRetryMenu={() => setRetryMenuOpen((prev) => !prev)}
+        streamState={streamState}
+        error={error}
+        inlineNotice={inlineNotice}
+      />
       {autoPrompt && (
-        <div className="banner success">执行完成。如需修改请审核并应用。</div>
+        <div className="banner success">{t.messages.runCompletedApplyHint}</div>
       )}
-      <div className="card">
-        <h2>执行信息</h2>
-        <div className="list">
-          <div className="list-item">
-            <div className="title">执行 ID</div>
-            <div className="meta">{runId}</div>
-          </div>
-          <div className="list-item">
-            <div className="title">计划 ID</div>
-            <div className="meta">{resolvedPlanId}</div>
-          </div>
-          <div className="list-item">
-            <div>
-              <div className="title">状态</div>
-              <div className="meta">{statusText}</div>
-            </div>
-            <div className={`pill ${getStatusClassName(unifiedStatus)}`}>{statusText}</div>
-          </div>
-          <div className="list-item">
-            <div className="title">当前阶段</div>
-            <div className="meta">{workflowStage}</div>
-          </div>
-          <div className="list-item">
-            <div className="title">策略</div>
-            <div className="meta">{runInfo?.policy || "-"}</div>
-          </div>
-          <div className="list-item">
-            <div className="title">任务</div>
-            <div className="meta">{task}</div>
-          </div>
-          <div className="list-item">
-            <div className="title">更新时间</div>
-            <div className="meta">{updated || "-"}</div>
-          </div>
-        </div>
-      </div>
+      <RunInfoCard
+        runId={runId}
+        planId={resolvedPlanId}
+        unifiedStatus={unifiedStatus}
+        statusText={statusText}
+        workflowStage={workflowStage}
+        policy={runInfo?.policy || "-"}
+        task={task}
+        updated={updated || "-"}
+      />
       {hasPlanId && (
         <div className="card">
-          <h2>任务链进度</h2>
-          {planLoading && <div className="muted">加载任务链中...</div>}
+          <h2>{t.titles.taskChainProgress}</h2>
+          {planLoading && <div className="muted">{t.messages.taskChainLoading}</div>}
           {planError && <div className="error">{planError}</div>}
           {!planLoading && planTasks.length > 0 && (
             <>
@@ -548,23 +567,24 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
               </div>
               <div className="row">
                 <span className="pill">{taskProgress}%</span>
-                <span className="pill subtle">完成 {taskStats.done}/{taskStats.total}</span>
-                {taskStats.doing > 0 && <span className="pill warn">执行中 {taskStats.doing}</span>}
-                {taskStats.failed > 0 && <span className="pill error">失败 {taskStats.failed}</span>}
+                <span className="pill subtle">{t.labels.tasksDone} {taskStats.done}/{taskStats.total}</span>
+                {taskStats.doing > 0 && <span className="pill warn">{t.labels.tasksDoing} {taskStats.doing}</span>}
+                {taskStats.failed > 0 && <span className="pill error">{t.labels.tasksFailed} {taskStats.failed}</span>}
               </div>
               <div className="list">
                 {planTasks.map((taskItem, idx) => {
                   const taskId = taskItem.step_id || taskItem.id || taskItem.task_id || `task-${idx + 1}`;
-                  const title = taskItem.title || taskItem.name || `Task ${idx + 1}`;
+                  const title = taskItem.title || taskItem.name || `${t.labels.task} ${idx + 1}`;
                   const status = String(taskItem.status || "todo").toLowerCase();
+                  const statusLabel = t.status[status as keyof typeof t.status] || status;
                   return (
                     <div key={taskId} className="list-item task-item">
                       <div>
                         <div className="title">{title}</div>
-                        <div className="meta">id {taskId}</div>
+                        <div className="meta">{t.labels.taskId} {taskId}</div>
                         {taskItem.description && <div className="meta">{taskItem.description}</div>}
                       </div>
-                      <div className={`pill ${status}`}>{status}</div>
+                      <div className={`pill ${status}`}>{statusLabel}</div>
                     </div>
                   );
                 })}
@@ -572,30 +592,22 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
             </>
           )}
           {!planLoading && planTasks.length === 0 && !planError && (
-            <div className="muted">暂无任务链数据。</div>
+            <div className="muted">{t.messages.taskChainEmptyData}</div>
           )}
         </div>
       )}
-      <div className="card">
-        <h2>进度</h2>
-        <ProgressPanel
-          progress={progress}
-          currentStep={currentStep}
-          latestEvents={latestEvents}
-          warningCount={warningCount}
-          errorCount={errorCount}
-        />
-      </div>
       {awaitingReview && (
         <div className="card">
-          <h2>审核与应用</h2>
-          {reviewLoading && <div className="muted">加载补丁集中...</div>}
+          <h2>{t.titles.reviewApply}</h2>
+          {reviewLoading && <div className="muted">{t.messages.reviewLoading}</div>}
           {reviewError && <div className="error">{reviewError}</div>}
           {changedFiles.length > 0 && (
             <div className="list">
               {changedFiles.map((item, idx) => (
                 <div key={`${item.path}-${idx}`} className="list-item">
-                  <div className="title">{item.path}</div>
+                  <button className="file-link" onClick={() => handleOpenChangedFile(item.path)}>
+                    {item.path}
+                  </button>
                   <div className="pill">{item.status}</div>
                 </div>
               ))}
@@ -603,15 +615,15 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
           )}
           {patchsetText && <DiffViewer diffText={patchsetText} changedFiles={changedFiles} />}
           <div className="row">
-            <button onClick={handleApply} disabled={actionLoading}>通过审核并应用</button>
-            <button onClick={handleDiscard} disabled={actionLoading}>丢弃</button>
+            <button onClick={handleApply} disabled={actionLoading}>{t.buttons.applyReview}</button>
+            <button onClick={handleDiscard} disabled={actionLoading}>{t.buttons.discardChanges}</button>
           </div>
         </div>
       )}
 
       {failed && (
         <div className="card">
-          <h2>返工</h2>
+          <h2>{t.titles.rework}</h2>
           {failureError && <div className="error">{failureError}</div>}
           {failureInfo?.summaryText && <pre className="pre">{failureInfo.summaryText}</pre>}
           {failureInfo?.reasons && failureInfo.reasons.length > 0 && (
@@ -620,23 +632,23 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
           {failureInfo?.reportText && <pre className="pre">{failureInfo.reportText}</pre>}
           <textarea
             className="textarea"
-            placeholder="可选：返工反馈"
+            placeholder={t.messages.reworkFeedbackPlaceholder}
             value={reworkFeedback}
             onChange={(e) => setReworkFeedback(e.target.value)}
             rows={3}
           />
           <div className="row">
-            <button onClick={handleRework} disabled={actionLoading}>返工当前步骤</button>
+            <button onClick={handleRework} disabled={actionLoading}>{t.buttons.reworkStep}</button>
           </div>
         </div>
       )}
       <div className="card">
-        <h2>事件</h2>
+        <h2>{t.titles.events}</h2>
         <EventTimeline
           events={events}
           streamState={streamState}
           autoScroll
-          emptyLabel={streamState === "disconnected" ? "事件流已断开。" : undefined}
+          emptyLabel={streamState === "disconnected" ? t.messages.eventStreamDisconnected : undefined}
           onRework={handleInlineRework}
         />
       </div>

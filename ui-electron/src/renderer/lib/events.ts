@@ -120,6 +120,10 @@ export function getEventTypeLabel(evt: RunEvent): string {
 export function formatStepSummary(evt: RunEvent): string {
   const type = formatEventType(evt).toLowerCase();
   const data = (evt.data ?? evt.payload ?? {}) as Record<string, unknown>;
+  const taskTitle =
+    (evt as Record<string, unknown>).task_title ||
+    (evt as Record<string, unknown>).taskTitle ||
+    (evt as Record<string, unknown>).title;
   
   // 优先使用事件自带的 summary
   if (typeof evt.summary === "string" && evt.summary.trim()) {
@@ -173,6 +177,9 @@ export function formatStepSummary(evt: RunEvent): string {
     case "step_start": {
       const stepId = getEventStepId(evt);
       const taskId = (evt as Record<string, unknown>).task_id;
+      if (typeof taskTitle === "string" && taskTitle.trim()) {
+        return `开始步骤 ${stepId || ""}: ${truncate(taskTitle, 40)}`;
+      }
       if (taskId) {
         return `开始步骤 ${stepId || ""}: ${truncate(String(taskId), 40)}`;
       }

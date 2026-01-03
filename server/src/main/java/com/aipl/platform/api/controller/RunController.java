@@ -8,10 +8,13 @@ import com.aipl.platform.engine.EnginePaths;
 import com.aipl.platform.repository.RunRepository;
 import com.aipl.platform.service.RunService;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.awt.Desktop;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -23,6 +26,7 @@ public class RunController {
     private final RunRepository store;
     private final EnginePaths paths;
     private final RunService runService;
+    private final ObjectMapper mapper = new ObjectMapper();
 
     public RunController(RunRepository store, EnginePaths paths, RunService runService) {
         this.store = store;
@@ -80,6 +84,13 @@ public class RunController {
                             idle = 0;
                         } else {
                             idle++;
+                            try {
+                                emitter.send(SseEmitter.event()
+                                        .name("heartbeat")
+                                        .data("{\"ts\":" + System.currentTimeMillis() + ",\"cursor\":" + cur + "}"));
+                            } catch (Exception ignored) {
+                                // ignore heartbeat failures
+                            }
                         }
                     }
                     if (idle >= 5) {
@@ -156,6 +167,43 @@ public class RunController {
         return ApiResponse.ok(data);
     }
 
+    @PostMapping("/runs/{runId}/open-file")
+    public ApiResponse<JsonNode> openFile(@PathVariable String runId,
+                                          @RequestParam(required = false) String planId,
+                                          @RequestBody(required = false) JsonNode payload) throws Exception {
+        String relPath = payload != null && payload.has("path") ? payload.get("path").asText(null) : null;
+        if (relPath == null || relPath.isBlank()) {
+            return ApiResponse.fail("path is required");
+        }
+        String resolvedPlanId = (planId != null && !planId.isBlank()) ? planId : paths.resolvePlanIdForRun(runId);
+        Path runDir = paths.resolveRunDir(resolvedPlanId, runId);
+        if (runDir == null || !Files.exists(runDir)) {
+            return ApiResponse.fail("run not found");
+        }
+        Path metaPath = runDir.resolve("meta.json");
+        if (!Files.exists(metaPath)) {
+            return ApiResponse.fail("meta not found");
+        }
+        JsonNode meta = mapper.readTree(metaPath.toFile());
+        String stageRoot = meta.path("workspace_stage_root").asText(null);
+        String mainRoot = meta.path("workspace_main_root").asText(null);
+        if ((stageRoot == null || stageRoot.isBlank()) && (mainRoot == null || mainRoot.isBlank())) {
+            return ApiResponse.fail("workspace root not found");
+        }
+        Path target = resolveWorkspacePath(stageRoot, relPath);
+        if (target == null) {
+            target = resolveWorkspacePath(mainRoot, relPath);
+        }
+        if (target == null) {
+            return ApiResponse.fail("file not found");
+        }
+        openPath(target);
+        ObjectNode res = mapper.createObjectNode();
+        res.put("opened", true);
+        res.put("path", target.toString());
+        return ApiResponse.ok(res);
+    }
+
 
     @PostMapping("/runs/{runId}/rework")
     public ApiResponse<JsonNode> rework(@PathVariable String runId, @RequestParam(required = false) String planId, @RequestBody ReworkRequest req) throws Exception {
@@ -179,6 +227,49 @@ public class RunController {
     @DeleteMapping("/runs/{runId}")
     public ApiResponse<JsonNode> deleteRun(@PathVariable String runId, @RequestParam(required = false) String planId) throws Exception {
         return ApiResponse.ok(runService.deleteRun(planId, runId));
+    }
+
+    private void openPath(Path target) throws Exception {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        if (os.contains("win")) {
+            new ProcessBuilder("explorer", "/select,", target.toString()).start();
+            return;
+        }
+        if (os.contains("mac")) {
+            new ProcessBuilder("open", "-R", target.toString()).start();
+            return;
+        }
+        Path folder = target.getParent();
+        if (folder == null) {
+            folder = target;
+        }
+        if (Desktop.isDesktopSupported()) {
+            Desktop desktop = Desktop.getDesktop();
+            if (desktop.isSupported(Desktop.Action.OPEN)) {
+                desktop.open(folder.toFile());
+                return;
+            }
+        }
+        new ProcessBuilder("xdg-open", folder.toString()).start();
+    }
+
+    private Path resolveWorkspacePath(String workspaceRoot, String relPath) {
+        if (workspaceRoot == null || workspaceRoot.isBlank()) {
+            return null;
+        }
+        Path base = Path.of(workspaceRoot).toAbsolutePath().normalize();
+        Path rel = Path.of(relPath);
+        if (rel.isAbsolute()) {
+            return null;
+        }
+        Path target = base.resolve(rel).normalize();
+        if (!target.startsWith(base)) {
+            return null;
+        }
+        if (!Files.exists(target)) {
+            return null;
+        }
+        return target;
     }
 
 }

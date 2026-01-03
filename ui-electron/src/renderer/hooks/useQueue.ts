@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { loadJson, saveDebounced } from "../lib/storage";
+import { STORAGE_KEYS } from "../config/settings";
 import { ExecutionStatus, ReviewStatus } from "../lib/status";
 
 export type QueueStatus = ExecutionStatus;
@@ -19,8 +20,8 @@ export type QueueItem = {
   chatTitle?: string;
 };
 
-const QUEUE_KEY = "aipl.pilot.queue";
-const QUEUE_PAUSED_KEY = "aipl.pilot.queuePaused";
+const QUEUE_KEY = STORAGE_KEYS.queueKey;
+const QUEUE_PAUSED_KEY = STORAGE_KEYS.queuePausedKey;
 
 function loadQueue(): QueueItem[] {
   const items = loadJson<QueueItem[]>(QUEUE_KEY, []);

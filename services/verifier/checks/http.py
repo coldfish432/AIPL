@@ -32,6 +32,9 @@ def _http_request_with_retry(req: Request, data: bytes | None, timeout: int, ret
     last_error = None
     for _ in range(max(retries, 1)):
         try:
+            if data is None:
+                with urlopen(req, timeout=timeout) as resp:
+                    return resp.getcode(), resp.read().decode("utf-8", errors="replace"), None
             with urlopen(req, data=data, timeout=timeout) as resp:
                 return resp.getcode(), resp.read().decode("utf-8", errors="replace"), None
         except Exception as exc:

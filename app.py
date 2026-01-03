@@ -5,7 +5,7 @@ from pathlib import Path
 from infra.container import Container, Lifetime
 from interfaces.protocols import ICodeGraphService, IProfileService, IVerifier
 from services.code_graph_service import CodeGraphService
-from services.controller_service import TaskController
+from services.controller import TaskController
 from services.profile_service import ProfileService
 from services.verifier import VerifierService
 

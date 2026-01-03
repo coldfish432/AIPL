@@ -19,6 +19,33 @@ from config import (
 from profile_store import ensure_profile_tables, read_profile, upsert_profile, log_review
 from soft_proposer import propose_soft_profile
 
+_MEMORY_CONN: sqlite3.Connection | None = None
+_MEMORY_MODE = False
+
+
+def _connect_memory_db() -> sqlite3.Connection:
+    global _MEMORY_CONN, _MEMORY_MODE
+    if _MEMORY_CONN is None:
+        _MEMORY_CONN = sqlite3.connect(":memory:")
+        try:
+            _MEMORY_CONN.execute("PRAGMA journal_mode=MEMORY")
+            _MEMORY_CONN.execute("PRAGMA temp_store=MEMORY")
+        except Exception:
+            pass
+    _MEMORY_MODE = True
+    return _MEMORY_CONN
+
+
+def _close_conn(conn: sqlite3.Connection | None) -> None:
+    if conn is None:
+        return
+    if _MEMORY_MODE and conn is _MEMORY_CONN:
+        return
+    try:
+        conn.close()
+    except Exception:
+        pass
+
 FINGERPRINT_FILES = [
     "pom.xml",
     "build.gradle",
@@ -165,18 +192,35 @@ def merge_hard_policy(system_hard: dict, user_hard: dict | None) -> tuple[dict, 
 
 # 打开档案db，创建目录
 def _open_profile_db(root: Path) -> sqlite3.Connection | None:
+    global _MEMORY_MODE
     db_path = resolve_db_path(root)
     if not db_path:
         return None
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    try:
+        conn = sqlite3.connect(str(db_path))
+    except sqlite3.OperationalError:
+        conn = _connect_memory_db()
+    except Exception:
+        return None
     try:
         # 使用内存事务日志，避免在受限文件系统上删除/创建 journal 文件失败
         conn.execute("PRAGMA journal_mode=MEMORY")
         conn.execute("PRAGMA temp_store=MEMORY")
     except Exception:
-        pass
-    ensure_profile_tables(conn)
+        if conn is not _MEMORY_CONN:
+            try:
+                conn = _connect_memory_db()
+            except Exception:
+                return None
+    try:
+        ensure_profile_tables(conn)
+    except sqlite3.OperationalError:
+        try:
+            conn = _connect_memory_db()
+            ensure_profile_tables(conn)
+        except Exception:
+            return None
     return conn
 
 
@@ -225,7 +269,7 @@ def ensure_profile(root: Path, workspace: Path) -> dict:
         if created:
             profile.setdefault("soft_version", 0)
         upsert_profile(conn, profile)
-    conn.close()
+    _close_conn(conn)
 
     return {
         **profile,
@@ -250,7 +294,7 @@ def propose_soft(root: Path, workspace: Path, reason: str) -> dict:
         stored["updated_at"] = int(time.time())
         upsert_profile(conn, stored)
         log_review(conn, profile["workspace_id"], "propose", profile.get("fingerprint") or "", {"reason": reason, "draft": draft})
-    conn.close()
+    _close_conn(conn)
     profile["soft_draft"] = draft
     return profile
 
@@ -272,7 +316,7 @@ def approve_soft(root: Path, workspace: Path) -> dict:
             upsert_profile(conn, stored)
             log_review(conn, profile["workspace_id"], "approve", profile.get("fingerprint") or "", {"draft": draft, "soft_version": stored["soft_version"]})
         profile = stored
-    conn.close()
+    _close_conn(conn)
     return profile
 
 
@@ -290,7 +334,7 @@ def reject_soft(root: Path, workspace: Path) -> dict:
         upsert_profile(conn, stored)
         log_review(conn, profile["workspace_id"], "reject", profile.get("fingerprint") or "", {"reason": "manual_reject"})
         profile = stored
-    conn.close()
+    _close_conn(conn)
     return profile
 
 
@@ -303,7 +347,7 @@ def load_profile(root: Path, workspace: Path) -> dict | None:
         return None
     with conn:
         profile = read_profile(conn, workspace_id)
-    conn.close()
+    _close_conn(conn)
     return profile
 
 

@@ -2,13 +2,16 @@ import React, { useEffect, useRef } from "react";
 import { RunEvent } from "../apiClient";
 import {
   StreamState,
+  formatEventMessage,
   formatStepSummary,
   formatTimestamp,
   getEventKey,
   getEventLevel,
   getEventStepId,
-  getEventTypeLabel
+  getEventTypeLabel,
+  formatEventType
 } from "../lib/events";
+import { useI18n } from "../lib/useI18n";
 
 type Props = {
   events: RunEvent[];
@@ -19,6 +22,7 @@ type Props = {
 };
 
 export default function EventTimeline({ events, streamState, autoScroll, emptyLabel, onRework }: Props) {
+  const { language, t } = useI18n();
   const logRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -28,14 +32,14 @@ export default function EventTimeline({ events, streamState, autoScroll, emptyLa
 
   return (
     <div className="timeline" ref={logRef}>
-      {streamState === "disconnected" && <div className="timeline-banner">正在重连...</div>}
+      {streamState === "disconnected" && <div className="timeline-banner">{t.messages.eventStreamReconnecting}</div>}
       {events.length === 0 && (
-        <div className="muted">{emptyLabel || "等待事件中..."}</div>
+        <div className="muted">{emptyLabel || t.messages.eventStreamWaiting}</div>
       )}
       {events.map((evt, idx) => {
         const time = formatTimestamp(evt.ts ?? evt.time ?? evt.timestamp ?? evt.created_at);
-        const label = getEventTypeLabel(evt);
-        const summary = formatStepSummary(evt);
+        const label = language === "zh" ? getEventTypeLabel(evt) : formatEventType(evt);
+        const summary = language === "zh" ? formatStepSummary(evt) : formatEventMessage(evt);
         const level = getEventLevel(evt);
         const stepId = getEventStepId(evt);
         
@@ -50,7 +54,7 @@ export default function EventTimeline({ events, streamState, autoScroll, emptyLa
                 onClick={() => onRework?.(stepId)}
                 disabled={!onRework}
               >
-                返工
+                {t.buttons.rework}
               </button>
             )}
           </div>

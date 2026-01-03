@@ -1,2 +1,2 @@
-collected 1 items
-results: 1 passed
+collected 45 items
+45 passed, in 35.68s

@@ -13,6 +13,10 @@ export function saveDebounced<T>(key: string, value: T): void {
   timers.set(key, timer);
 }
 
+export function saveJson<T>(key: string, value: T): void {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
 export function loadJson<T>(key: string, fallback: T): T {
   const raw = localStorage.getItem(key);
   if (!raw) return fallback;

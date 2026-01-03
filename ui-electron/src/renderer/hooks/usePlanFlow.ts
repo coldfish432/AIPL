@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { assistantConfirm, assistantPlan, ChatMessage, getPlan } from "../apiClient";
+import { useI18n } from "../lib/useI18n";
 
 type PlanFlowResult = {
   planId: string | null;
@@ -7,18 +8,22 @@ type PlanFlowResult = {
 };
 
 export function usePlanFlow() {
+  const { t } = useI18n();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const createPlan = async (messages: ChatMessage[], workspace?: string): Promise<PlanFlowResult | null> => {
     if (!messages || messages.length === 0) {
-      setError("请先输入任务描述。");
+      setError(t.messages.needDescribeTask);
       return null;
     }
     setLoading(true);
     setError(null);
     try {
-      const res = await assistantPlan({ messages, workspace });
+      const res = await assistantPlan({
+        messages: [{ role: "system", content: t.prompts.systemLanguage }, ...messages],
+        workspace
+      });
       const planId = res.plan_id || res.planId || null;
       let planText = "";
       if (planId) {
@@ -26,15 +31,18 @@ export function usePlanFlow() {
         const tasks = detail?.snapshot?.tasks || detail?.plan?.raw_plan?.tasks || [];
         const lines = tasks.map((task, idx) => {
           const stepId = task.step_id || task.id || `task-${idx + 1}`;
-          const title = task.title || `任务 ${idx + 1}`;
+          const title = task.title || `${t.labels.task} ${idx + 1}`;
           return `${idx + 1}. ${title} [${stepId}]`;
         });
-        planText = detail?.task_chain_text || detail?.plan?.task_chain_text || ["任务链：", ...lines].join("\n");
+        planText =
+          detail?.task_chain_text ||
+          detail?.plan?.task_chain_text ||
+          [`${t.labels.taskChain}:`, ...lines].join("\n");
       }
       return { planId, planText };
     } catch (err) {
-      const message = err instanceof Error ? err.message : "生成计划失败";
-      setError(message || "生成计划失败");
+      const message = err instanceof Error ? err.message : t.messages.planFailed;
+      setError(message || t.messages.planFailed);
       return null;
     } finally {
       setLoading(false);
@@ -47,8 +55,8 @@ export function usePlanFlow() {
     try {
       return await assistantConfirm({ planId, workspace, mode: "autopilot", policy });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "启动执行失败";
-      setError(message || "启动执行失败");
+      const message = err instanceof Error ? err.message : t.messages.startRunFailedNoId;
+      setError(message || t.messages.startRunFailedNoId);
       return null;
     } finally {
       setLoading(false);

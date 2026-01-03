@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import dagre from "dagre";
 import { PlanTask } from "../apiClient";
+import { useI18n } from "../lib/useI18n";
 
 type Props = {
   tasks: PlanTask[];
@@ -35,6 +36,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function TaskGraph({ tasks, onTaskClick }: Props) {
+  const { t } = useI18n();
   const { nodes, edges, width, height } = useMemo(() => {
     const g = new dagre.graphlib.Graph();
     g.setGraph({ rankdir: "TB", nodesep: 40, ranksep: 60 });
@@ -91,7 +93,7 @@ export default function TaskGraph({ tasks, onTaskClick }: Props) {
   }, [tasks]);
 
   if (tasks.length === 0) {
-    return <div className="muted">暂无任务数据</div>;
+    return <div className="muted">{t.messages.taskChainEmptyData}</div>;
   }
 
   return (
@@ -148,7 +150,7 @@ export default function TaskGraph({ tasks, onTaskClick }: Props) {
         {Object.entries(STATUS_COLORS).map(([status, color]) => (
           <span key={status} className="legend-item">
             <span className="legend-dot" style={{ background: color }} />
-            {status}
+            {t.status[status as keyof typeof t.status] || status}
           </span>
         ))}
       </div>

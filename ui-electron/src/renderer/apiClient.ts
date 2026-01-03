@@ -1,4 +1,7 @@
-const BASE_URL = import.meta.env.DEV ? "" : "http://127.0.0.1:18088";
+import { API_BASE_URL } from "./config/settings";
+import { AiplError, ApiError } from "./lib/errors";
+
+const BASE_URL = API_BASE_URL;
 
 type ApiEnvelope<T> = {
   ok?: boolean;
@@ -104,6 +107,9 @@ export type RunEvent = {
   message?: string;
   detail?: string;
   summary?: string;
+  task_title?: string;
+  taskTitle?: string;
+  title?: string;
   status?: string;
   level?: string;
   severity?: string;
@@ -121,6 +127,15 @@ export type RunEvent = {
   doneSteps?: number;
   data?: unknown;
   payload?: unknown;
+};
+
+export type RunEventsResponse = {
+  run_id?: string;
+  cursor?: number;
+  next_cursor?: number;
+  cursor_type?: string;
+  total?: number;
+  events?: RunEvent[];
 };
 
 export type ArtifactItem = {
@@ -161,7 +176,7 @@ export type AssistantPlanResponse = {
 };
 
 export type ChatMessage = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
 };
 
@@ -188,10 +203,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   const body = (await res.json().catch(() => null)) as ApiEnvelope<T> | T | null;
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
+    if (body && typeof body === "object" && "error" in (body as ApiError)) {
+      throw AiplError.fromApiError(body as ApiError);
+    }
+    throw new AiplError(`HTTP ${res.status}`, "HTTP_ERROR", { status: res.status });
   }
   if (body && typeof body === "object" && "ok" in body && (body as ApiEnvelope<T>).ok === false) {
-    throw new Error((body as ApiEnvelope<T>).error || "Request failed");
+    const envelope = body as ApiEnvelope<T>;
+    const error = envelope.error || "Request failed";
+    throw new AiplError(error, "API_ERROR");
   }
   if (body && typeof body === "object" && "data" in (body as ApiEnvelope<T>)) {
     return (body as ApiEnvelope<T>).data as T;
@@ -280,6 +300,15 @@ export async function getRun(runId: string, planId?: string): Promise<RunDetailR
   return request<RunDetailResponse>(`/api/runs/${encodeURIComponent(runId)}${q}`);
 }
 
+export async function getRunEvents(runId: string, planId?: string, cursor = 0, limit = 200): Promise<RunEventsResponse> {
+  const params = new URLSearchParams();
+  if (planId) params.set("planId", planId);
+  params.set("cursor", String(cursor));
+  params.set("limit", String(limit));
+  const q = params.toString() ? `?${params}` : "";
+  return request<RunEventsResponse>(`/api/runs/${encodeURIComponent(runId)}/events${q}`);
+}
+
 export function streamRunEvents(runId: string, planId?: string): EventSource {
   const q = planId ? `?planId=${encodeURIComponent(planId)}` : "";
   return new EventSource(`${BASE_URL}/api/runs/${encodeURIComponent(runId)}/events/stream${q}`);
@@ -293,6 +322,14 @@ export async function applyRun(runId: string, planId?: string): Promise<RunDetai
 export async function discardRun(runId: string, planId?: string): Promise<RunDetailResponse> {
   const q = planId ? `?planId=${encodeURIComponent(planId)}` : "";
   return request<RunDetailResponse>(`/api/runs/${encodeURIComponent(runId)}/discard${q}`, { method: "POST" });
+}
+
+export async function openRunFile(runId: string, filePath: string, planId?: string): Promise<{ opened?: boolean; path?: string }> {
+  const q = planId ? `?planId=${encodeURIComponent(planId)}` : "";
+  return request<{ opened?: boolean; path?: string }>(`/api/runs/${encodeURIComponent(runId)}/open-file${q}`, {
+    method: "POST",
+    body: JSON.stringify({ path: filePath })
+  });
 }
 
 export async function getRunArtifacts(runId: string, planId?: string): Promise<ArtifactsResponse> {

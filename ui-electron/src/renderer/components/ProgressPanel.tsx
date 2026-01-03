@@ -1,6 +1,7 @@
 import React from "react";
 import { RunEvent } from "../apiClient";
 import { formatEventMessage, formatEventType, formatTimestamp } from "../lib/events";
+import { useI18n } from "../lib/useI18n";
 
 type Props = {
   progress: number;
@@ -11,6 +12,7 @@ type Props = {
 };
 
 export default function ProgressPanel({ progress, currentStep, latestEvents, warningCount, errorCount }: Props) {
+  const { t } = useI18n();
   return (
     <div className="progress-panel">
       <div className="progress large">
@@ -18,9 +20,9 @@ export default function ProgressPanel({ progress, currentStep, latestEvents, war
       </div>
       <div className="row">
         <span className="pill">{progress}%</span>
-        <span className="pill subtle">步骤 {currentStep}</span>
-        {errorCount > 0 && <span className="pill error">错误 {errorCount}</span>}
-        {warningCount > 0 && <span className="pill warn">警告 {warningCount}</span>}
+        <span className="pill subtle">{t.labels.taskId} {currentStep}</span>
+        {errorCount > 0 && <span className="pill error">{t.labels.error} {errorCount}</span>}
+        {warningCount > 0 && <span className="pill warn">{t.labels.warning} {warningCount}</span>}
       </div>
       <div className="list compact">
         {latestEvents.map((evt, idx) => (
@@ -32,7 +34,7 @@ export default function ProgressPanel({ progress, currentStep, latestEvents, war
             <div className="meta">{formatEventMessage(evt)}</div>
           </div>
         ))}
-        {latestEvents.length === 0 && <div className="muted">暂无最近事件。</div>}
+        {latestEvents.length === 0 && <div className="muted">{t.messages.noEvents}</div>}
       </div>
     </div>
   );

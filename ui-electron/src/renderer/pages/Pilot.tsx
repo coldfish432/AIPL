@@ -1,26 +1,40 @@
 ﻿import React, { useCallback, useEffect, useRef, useState } from "react";
-import { assistantChat, assistantConfirm, assistantPlan, getPlan, getRun, listRuns } from "../apiClient";
+import { assistantChat, assistantConfirm, assistantPlan, discardRun, getPlan, getRun, listRuns } from "../apiClient";
 import ChatSidebar from "../components/ChatSidebar";
 import ChatPanel from "../components/ChatPanel";
 import QueuePanel from "../components/QueuePanel";
+import { PlanLockStatus } from "../components/PlanLockStatus";
+import PilotComposer from "./pilot/PilotComposer";
+import PilotHeader from "./pilot/PilotHeader";
 import { useQueue, QueueItem, QueueStatus } from "../hooks/useQueue";
-import { useSession, ChatMessage } from "../hooks/useSession";
+import { usePlanLock } from "../hooks/usePlanLock";
+import { useSession, ChatMessage, appendStoredMessage, getStoredSession, setStoredPending, updateStoredSession } from "../hooks/useSession";
 import { useVisibilityPolling } from "../hooks/useVisibilityPolling";
 import { resolveStatus, isFinished } from "../lib/status";
+import { useI18n } from "../lib/useI18n";
+import { STORAGE_KEYS } from "../config/settings";
+import { useNavigate } from "react-router-dom";
 
-const BASE_WORKSPACE_KEY = "aipl.pilot.baseWorkspace";
+const BASE_WORKSPACE_KEY = STORAGE_KEYS.baseWorkspaceKey;
 
-function buildTextFromTasks(tasks: Array<{ step_id?: string; id?: string; title?: string; dependencies?: string[] }>): string {
+function makeRequestId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildTextFromTasks(
+  tasks: Array<{ step_id?: string; id?: string; title?: string; dependencies?: string[] }>,
+  labels: { taskChain: string; task: string; dependencies: string; taskChainEmpty: string }
+): string {
   if (!Array.isArray(tasks) || tasks.length === 0) {
-    return "任务链：(空)";
+    return labels.taskChainEmpty;
   }
   const lines = tasks.map((task, idx) => {
     const stepId = task.step_id || task.id || `task-${idx + 1}`;
-    const title = task.title || `任务 ${idx + 1}`;
+    const title = task.title || `${labels.task} ${idx + 1}`;
     const deps = Array.isArray(task.dependencies) && task.dependencies.length > 0 ? task.dependencies.join(", ") : "-";
-    return `${idx + 1}. ${title} [${stepId}] (依赖: ${deps})`;
+    return `${idx + 1}. ${title} [${stepId}] (${labels.dependencies}: ${deps})`;
   });
-  return ["任务链：", ...lines].join("\n");
+  return [`${labels.taskChain}:`, ...lines].join("\n");
 }
 
 function normalizeWorkspaceCandidate(value?: string): string | undefined {
@@ -35,24 +49,31 @@ function normalizeWorkspaceCandidate(value?: string): string | undefined {
 }
 
 export default function Pilot() {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const {
+    lock,
+    canStartNewPlan,
+    lockForPlan,
+    addPendingReview,
+    removePendingReview,
+    completeWithoutReview,
+    forceUnlock
+  } = usePlanLock();
   const {
     sessions,
     activeSession,
     activeId,
     setActiveId,
     createNewSession,
-    updateSession,
     deleteSession,
-    renameSession,
-    addMessage
+    renameSession
   } = useSession();
   const { queue, paused, setPaused, updateItem, updateQueue, cancelAll, clearQueue } = useQueue();
 
-  const [workspace, setWorkspace] = useState(() => localStorage.getItem("aipl.workspace") || "");
-  const [policy, setPolicy] = useState(() => localStorage.getItem("aipl.policy") || "guarded");
+  const [workspace, setWorkspace] = useState(() => localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
+  const [policy, setPolicy] = useState(() => localStorage.getItem(STORAGE_KEYS.policyKey) || "guarded");
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [loadingKind, setLoadingKind] = useState<"chat" | "plan" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [baseWorkspace, setBaseWorkspace] = useState(() => localStorage.getItem(BASE_WORKSPACE_KEY) || "");
@@ -63,7 +84,11 @@ export default function Pilot() {
   const pausedRef = useRef(paused);
   const baseWorkspaceRef = useRef(baseWorkspace);
 
+  const pending = activeSession?.pending ?? null;
+  const loading = Boolean(pending);
+  const loadingKind = pending?.kind ?? null;
   const canSend = input.trim().length > 0 && !loading;
+  const isLocked = lock.status !== "idle";
 
   useEffect(() => {
     queueRef.current = queue;
@@ -73,16 +98,16 @@ export default function Pilot() {
     workspaceRef.current = workspace;
     const trimmed = workspace.trim();
     if (trimmed) {
-      localStorage.setItem("aipl.workspace", trimmed);
+      localStorage.setItem(STORAGE_KEYS.workspaceKey, trimmed);
     } else {
-      localStorage.removeItem("aipl.workspace");
+      localStorage.removeItem(STORAGE_KEYS.workspaceKey);
     }
     window.dispatchEvent(new Event("aipl-workspace-changed"));
   }, [workspace]);
 
   useEffect(() => {
     policyRef.current = policy;
-    localStorage.setItem("aipl.policy", policy);
+    localStorage.setItem(STORAGE_KEYS.policyKey, policy);
   }, [policy]);
 
   useEffect(() => {
@@ -96,7 +121,7 @@ export default function Pilot() {
 
   useEffect(() => {
     const syncWorkspace = () => {
-      setWorkspace(localStorage.getItem("aipl.workspace") || "");
+      setWorkspace(localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
     };
     window.addEventListener("aipl-workspace-changed", syncWorkspace);
     return () => window.removeEventListener("aipl-workspace-changed", syncWorkspace);
@@ -104,6 +129,11 @@ export default function Pilot() {
 
   const enqueuePlan = useCallback(
     (planId: string, planText: string, session?: typeof activeSession | null) => {
+      const allowed = canStartNewPlan();
+      if (!allowed.allowed) {
+        setError(allowed.reason || t.messages.planLocked);
+        return;
+      }
       updateQueue((prev) => {
         const exists = prev.some((item) => item.planId === planId && !["failed", "canceled"].includes(item.status));
         if (exists) return prev;
@@ -130,8 +160,19 @@ export default function Pilot() {
         return nextQueue;
       });
     },
-    [updateQueue]
+    [canStartNewPlan, t.messages.planLocked, updateQueue]
   );
+
+  const resolveRunIdFromList = useCallback(async (planId: string | undefined) => {
+    if (!planId) return undefined;
+    try {
+      const runs = await listRuns();
+      const match = runs.find((run) => (run.plan_id || run.planId) === planId);
+      return match ? (match.run_id || match.runId) : undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
 
   const startNextQueued = useCallback(async (queueOverride?: QueueItem[]) => {
     if (pausedRef.current) return;
@@ -141,6 +182,7 @@ export default function Pilot() {
     }
     const next = currentQueue.find((item) => item.status === "queued");
     if (!next) return;
+    lockForPlan(next.planId);
     updateItem(next.id, (item) => ({ ...item, status: "starting", startedAt: Date.now() }));
     try {
       const workspaceBase =
@@ -154,13 +196,17 @@ export default function Pilot() {
         mode: "autopilot",
         policy: policyRef.current
       });
-      const runId = res.run_id || res.runId;
+      let runId = res.run_id || res.runId;
+      if (!runId) {
+        runId = await resolveRunIdFromList(next.planId);
+      }
       if (workspaceBase) {
         setBaseWorkspace(workspaceBase);
       }
       if (!runId) {
-        setError("启动执行失败：未返回 run_id");
+        setError(t.messages.startRunFailedNoId);
         updateItem(next.id, (item) => ({ ...item, status: "failed", finishedAt: Date.now() }));
+        forceUnlock();
         return;
       }
         updateItem(next.id, (item) => ({ ...item, status: "running", runId, reviewStatus: null }));
@@ -173,13 +219,26 @@ export default function Pilot() {
           reviewStatus: unified.review,
           finishedAt: isFinished(unified.execution) ? Date.now() : item.finishedAt
         }));
+        if (isFinished(unified.execution)) {
+          if (unified.review === "pending" && runId) {
+            addPendingReview(runId);
+          } else {
+            completeWithoutReview();
+          }
+        }
       } catch {
         // ignore immediate refresh errors
       }
     } catch {
+      const fallbackRunId = await resolveRunIdFromList(next.planId);
+      if (fallbackRunId) {
+        updateItem(next.id, (item) => ({ ...item, status: "running", runId: fallbackRunId, reviewStatus: null }));
+        return;
+      }
       updateItem(next.id, (item) => ({ ...item, status: "failed", reviewStatus: null, finishedAt: Date.now() }));
+      forceUnlock();
     }
-  }, [updateItem]);
+  }, [addPendingReview, completeWithoutReview, forceUnlock, lockForPlan, resolveRunIdFromList, updateItem]);
 
   const pollQueue = useCallback(async () => {
     const currentQueue = queueRef.current;
@@ -232,6 +291,13 @@ export default function Pilot() {
           reviewStatus: unified.review,
           finishedAt: isFinished(unified.execution) ? Date.now() : q.finishedAt
         }));
+        if (isFinished(unified.execution) && item.planId === lock.activePlanId) {
+          if (unified.review === "pending" && runId) {
+            addPendingReview(runId);
+          } else {
+            completeWithoutReview();
+          }
+        }
       } catch {
         updateItem(item.id, (q) => ({ ...q, status: "failed", reviewStatus: null, finishedAt: Date.now() }));
       }
@@ -244,7 +310,7 @@ export default function Pilot() {
         void startNextQueued();
       }
     }
-  }, [startNextQueued, updateItem]);
+  }, [addPendingReview, completeWithoutReview, lock.activePlanId, startNextQueued, updateItem]);
 
   useVisibilityPolling(() => {
     void pollQueue();
@@ -252,30 +318,52 @@ export default function Pilot() {
 
   async function createPlanFromConversation(messageList: ChatMessage[]): Promise<{ planId: string | null; planText: string } | null> {
     if (!activeSession) {
-      setError("请先创建对话。");
+      setError(t.messages.needCreateChat);
       return null;
     }
-    setLoadingKind("plan");
-    setLoading(true);
+    const allowed = canStartNewPlan();
+    if (!allowed.allowed) {
+      setError(allowed.reason || t.messages.planLocked);
+      return null;
+    }
+    if (messageList.length === 0) {
+      setError(t.messages.needDescribeTask);
+      return null;
+    }
+    const sessionId = activeSession.id;
+    const requestId = makeRequestId();
+    setStoredPending(sessionId, { kind: "plan", startedAt: Date.now(), requestId });
     setError(null);
     try {
-      if (messageList.length === 0) {
-        setError("请先在对话中描述任务。");
-        return null;
-      }
-      const payloadMessages = messageList.map((msg) => ({ role: msg.role, content: msg.content }));
+      const payloadMessages = [
+        { role: "system", content: t.prompts.systemLanguage },
+        ...messageList.map((msg) => ({ role: msg.role, content: msg.content }))
+      ];
       const res = await assistantPlan({ messages: payloadMessages, workspace: workspaceRef.current.trim() || undefined });
       const nextPlanId = res.plan_id || res.planId || null;
       let planTextValue = "";
       if (nextPlanId) {
         const planDetail = await getPlan(nextPlanId);
-        const fallbackText = buildTextFromTasks(planDetail?.snapshot?.tasks || planDetail?.plan?.raw_plan?.tasks || []);
+        const fallbackText = buildTextFromTasks(
+          planDetail?.snapshot?.tasks || planDetail?.plan?.raw_plan?.tasks || [],
+          {
+            taskChain: t.labels.taskChain,
+            task: t.labels.task,
+            dependencies: t.labels.dependencies,
+            taskChainEmpty: t.messages.taskChainEmpty
+          }
+        );
         planTextValue = planDetail?.task_chain_text || planDetail?.plan?.task_chain_text || fallbackText;
       }
-      const summary = [nextPlanId ? `计划已生成：${nextPlanId}` : "计划已生成。", planTextValue || "任务链：(空)"]
-        .filter(Boolean)
-        .join("\n");
-      updateSession(activeSession.id, (session) => ({
+      const summary = [
+        nextPlanId ? `${t.messages.planGenerated}: ${nextPlanId}` : t.messages.planGeneratedNoId,
+        planTextValue || t.messages.taskChainEmpty
+      ].join("\n");
+      const current = getStoredSession(sessionId);
+      if (!current?.pending || current.pending.requestId !== requestId) {
+        return null;
+      }
+      updateStoredSession(sessionId, (session) => ({
         ...session,
         planId: nextPlanId,
         planText: planTextValue,
@@ -287,44 +375,67 @@ export default function Pilot() {
       }));
       return { planId: nextPlanId, planText: planTextValue };
     } catch (err) {
-      const messageText = err instanceof Error ? err.message : "生成计划失败";
-      setError(messageText || "生成计划失败");
+      const current = getStoredSession(sessionId);
+      if (current?.pending?.requestId === requestId) {
+        const messageText = err instanceof Error ? err.message : t.messages.planFailed;
+        setError(messageText || t.messages.planFailed);
+      }
       return null;
     } finally {
-      setLoading(false);
-      setLoadingKind(null);
+      const current = getStoredSession(sessionId);
+      if (current?.pending?.requestId === requestId) {
+        setStoredPending(sessionId, null);
+      }
     }
   }
 
   async function handleSend() {
     if (!canSend || !activeSession) return;
     const message = input.trim();
+    const sessionId = activeSession.id;
+    const requestId = makeRequestId();
     setInput("");
-    addMessage(activeSession.id, { role: "user", content: message, kind: "text" });
-    setLoadingKind("chat");
-    setLoading(true);
+    appendStoredMessage(sessionId, { role: "user", content: message, kind: "text" });
+    setStoredPending(sessionId, { kind: "chat", startedAt: Date.now(), requestId });
     setError(null);
     try {
       const payloadMessages = activeSession.messages.concat({ role: "user", content: message });
       const res = await assistantChat({
-        messages: payloadMessages.map((msg) => ({ role: msg.role, content: msg.content })),
+        messages: [
+          { role: "system", content: t.prompts.systemLanguage },
+          ...payloadMessages.map((msg) => ({ role: msg.role, content: msg.content }))
+        ],
         workspace: workspaceRef.current.trim() || undefined,
         policy: policyRef.current
       });
+      const current = getStoredSession(sessionId);
+      if (!current?.pending || current.pending.requestId !== requestId) {
+        return;
+      }
       const reply = res.reply || res.message || "OK";
-      addMessage(activeSession.id, { role: "assistant", content: reply, kind: "text" });
+      appendStoredMessage(sessionId, { role: "assistant", content: reply, kind: "text" });
     } catch (err) {
-      const messageText = err instanceof Error ? err.message : "对话失败";
-      setError(messageText || "对话失败");
+      const current = getStoredSession(sessionId);
+      if (current?.pending?.requestId === requestId) {
+        const messageText = err instanceof Error ? err.message : t.messages.chatFailed;
+        setError(messageText || t.messages.chatFailed);
+      }
     } finally {
-      setLoading(false);
-      setLoadingKind(null);
+      const current = getStoredSession(sessionId);
+      if (current?.pending?.requestId === requestId) {
+        setStoredPending(sessionId, null);
+      }
     }
   }
 
   async function handleStartFlow() {
     if (!activeSession) {
-      setError("请先创建对话。");
+      setError(t.messages.needCreateChat);
+      return;
+    }
+    const allowed = canStartNewPlan();
+    if (!allowed.allowed) {
+      setError(allowed.reason || t.messages.planLocked);
       return;
     }
     let nextMessages = activeSession.messages;
@@ -332,24 +443,24 @@ export default function Pilot() {
     if (draft) {
       const appended = activeSession.messages.concat({ role: "user", content: draft, kind: "text" });
       nextMessages = appended;
-      updateSession(activeSession.id, (session) => ({
+      updateStoredSession(activeSession.id, (session) => ({
         ...session,
         messages: appended,
         updatedAt: Date.now(),
-        title: session.title.startsWith("对话 ") && draft ? draft.slice(0, 20) : session.title
+        title: /^(对话|Chat)\s+\d+$/.test(session.title) && draft ? draft.slice(0, 20) : session.title
       }));
       setInput("");
     }
     if (nextMessages.length === 0) {
-      setError("请先在对话中描述任务。");
+      setError(t.messages.needDescribeTask);
       return;
     }
     const lastUser = [...nextMessages].reverse().find((msg) => msg.role === "user");
-    updateSession(activeSession.id, (session) => ({
+    updateStoredSession(activeSession.id, (session) => ({
       ...session,
       messages: session.messages.filter((msg) => msg.kind !== "confirm").concat({
         role: "assistant",
-        content: "请确认最终计划内容（可编辑）：",
+        content: t.messages.finalPlanPrompt,
         kind: "confirm"
       }),
       pendingPlanMessages: nextMessages,
@@ -361,9 +472,14 @@ export default function Pilot() {
 
   async function confirmPlan() {
     if (!activeSession) return;
+    const allowed = canStartNewPlan();
+    if (!allowed.allowed) {
+      setError(allowed.reason || t.messages.planLocked);
+      return;
+    }
     const pendingPlan = activeSession.pendingPlanMessages;
     if (!pendingPlan) {
-      updateSession(activeSession.id, (session) => ({
+      updateStoredSession(activeSession.id, (session) => ({
         ...session,
         pendingPlanMessages: null,
         awaitingConfirm: false,
@@ -373,14 +489,14 @@ export default function Pilot() {
     }
     const trimmed = (activeSession.finalPlanText || "").trim();
     const merged = trimmed
-      ? pendingPlan.concat({ role: "user", content: `最终计划：${trimmed}`, kind: "text" })
+      ? pendingPlan.concat({ role: "user", content: `${t.prompts.finalPlanPrefix}${trimmed}`, kind: "text" })
       : pendingPlan;
     await createPlanFromConversation(merged);
   }
 
   function cancelPlan() {
     if (!activeSession) return;
-    updateSession(activeSession.id, (session) => ({
+    updateStoredSession(activeSession.id, (session) => ({
       ...session,
       pendingPlanMessages: null,
       awaitingConfirm: false,
@@ -390,31 +506,55 @@ export default function Pilot() {
 
   const handleUpdateFinalPlan = (value: string) => {
     if (!activeSession) return;
-    updateSession(activeSession.id, (session) => ({
+    updateStoredSession(activeSession.id, (session) => ({
       ...session,
       finalPlanText: value
     }));
   };
 
+  const handleGoToReview = useCallback(() => {
+    if (lock.activePlanId) {
+      navigate(`/plans/${lock.activePlanId}`);
+    }
+  }, [lock.activePlanId, navigate]);
+
+  const handleForceUnlock = useCallback(async () => {
+    if (!lock.activePlanId) return;
+    const confirmed = window.confirm(
+      `确定要丢弃任务链 ${lock.activePlanId} 的所有待审核任务吗？`
+    );
+    if (!confirmed) return;
+    for (const runId of lock.pendingReviewRuns) {
+      try {
+        await discardRun(runId, lock.activePlanId || undefined);
+        removePendingReview(runId);
+      } catch {
+        // ignore discard failures
+      }
+    }
+    forceUnlock();
+  }, [forceUnlock, lock.activePlanId, lock.pendingReviewRuns, removePendingReview]);
+
+  const handleTerminatePending = (sessionId?: string | null) => {
+    if (!sessionId) return;
+    setStoredPending(sessionId, null);
+  };
+
   return (
     <section className="stack">
       <div className="card">
-        <h2>导航</h2>
-        <div className="row">
-          <div className="meta">工作区：{workspace || "-"}</div>
-          <label className="pill-toggle">
-            <span>策略</span>
-            <select value={policy} onChange={(e) => setPolicy(e.target.value)}>
-              <option value="safe">安全</option>
-              <option value="guarded">守护</option>
-              <option value="full">完全</option>
-            </select>
-          </label>
-          <button onClick={handleStartFlow} disabled={loading || confirmLoading}>
-            {loading ? "生成中..." : "开始流程"}
-          </button>
-          <button onClick={createNewSession} disabled={loading || confirmLoading}>新建对话</button>
-        </div>
+        <h2>{t.titles.pilot}</h2>
+        <PlanLockStatus lock={lock} onGoToReview={handleGoToReview} onForceUnlock={handleForceUnlock} />
+        <PilotHeader
+          workspace={workspace}
+          policy={policy}
+          onPolicyChange={setPolicy}
+          onStartFlow={handleStartFlow}
+          onNewChat={createNewSession}
+          loading={loading}
+          confirmLoading={confirmLoading}
+          locked={isLocked}
+        />
 
         <div className="pilot-layout">
           <ChatSidebar
@@ -423,7 +563,8 @@ export default function Pilot() {
             onSelect={setActiveId}
             onRename={renameSession}
             onDelete={(id) => {
-              if (!window.confirm("确定删除这个对话吗？")) return;
+              if (!window.confirm(t.messages.confirmDeleteChat)) return;
+              handleTerminatePending(id);
               deleteSession(id);
             }}
           />
@@ -448,28 +589,25 @@ export default function Pilot() {
               onClear={clearQueue}
             />
 
-            <div className="row">
-              <textarea
-                className="textarea"
-                placeholder="描述你要执行的任务"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className="row">
-              <button onClick={handleSend} disabled={!canSend}>{loading ? "发送中..." : "发送"}</button>
-              {error && <span className="error">{error}</span>}
-              {loadingKind === "plan" && <span className="muted">Codex 生成计划中...</span>}
-              {loadingKind === "chat" && <span className="muted">对话中</span>}
-            </div>
+            <PilotComposer
+              input={input}
+              onInputChange={setInput}
+              onSend={handleSend}
+              canSend={canSend && !isLocked}
+              loading={loading}
+              loadingKind={loadingKind}
+              error={error}
+              onTerminate={() => handleTerminatePending(activeSession?.id)}
+              disabled={isLocked}
+              placeholder={isLocked ? "请先完成当前任务链的审核..." : undefined}
+            />
           </div>
         </div>
       </div>
       {activeSession?.planId && (
         <div className="card">
-          <h2>计划预览</h2>
-          <pre className="pre">{activeSession.planText || "任务链：(空)"}</pre>
+          <h2>{t.titles.planPreview}</h2>
+          <pre className="pre">{activeSession.planText || t.messages.taskChainEmpty}</pre>
         </div>
       )}
     </section>

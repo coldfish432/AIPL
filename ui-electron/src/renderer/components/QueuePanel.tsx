@@ -1,6 +1,7 @@
 import React from "react";
 import { QueueItem } from "../hooks/useQueue";
-import { getStatusDisplayText, getStatusClassName } from "../lib/status";
+import { getStatusClassName, getStatusDisplayText } from "../lib/status";
+import { useI18n } from "../lib/useI18n";
 
 type Props = {
   queue: QueueItem[];
@@ -19,10 +20,20 @@ function getPreview(item: QueueItem): string {
 }
 
 export default function QueuePanel({ queue, paused, onPauseToggle, onTerminate, onClear }: Props) {
+  const { t } = useI18n();
+
+  const getStatusLabel = (item: QueueItem) => {
+    const review = item.reviewStatus ?? null;
+    if (item.status === "completed" && review) {
+      return t.status[review] || getStatusDisplayText({ execution: item.status, review });
+    }
+    return t.status[item.status] || getStatusDisplayText({ execution: item.status, review });
+  };
+
   return (
     <div className="pilot-queue">
       <div className="pilot-queue-header">
-        <div className="pilot-queue-title">队列状态（全局）</div>
+        <div className="pilot-queue-title">{t.labels.queueStatusGlobal}</div>
         <select
           className="pilot-queue-select"
           value=""
@@ -34,14 +45,14 @@ export default function QueuePanel({ queue, paused, onPauseToggle, onTerminate, 
           }}
           disabled={queue.length === 0}
         >
-          <option value="">队列操作</option>
-          <option value="toggle">{paused ? "继续队列" : "暂停队列"}</option>
-          <option value="terminate">终止队列</option>
-          <option value="clear">清空队列</option>
+          <option value="">{t.labels.queueActions}</option>
+          <option value="toggle">{paused ? t.buttons.resumeQueue : t.buttons.pauseQueue}</option>
+          <option value="terminate">{t.buttons.terminateQueue}</option>
+          <option value="clear">{t.buttons.clearQueue}</option>
         </select>
       </div>
       {queue.length === 0 ? (
-        <div className="muted">暂无队列任务。</div>
+        <div className="muted">{t.messages.queueEmpty}</div>
       ) : (
         <div className="pilot-queue-list">
           {queue.map((item, idx) => (
@@ -55,7 +66,7 @@ export default function QueuePanel({ queue, paused, onPauseToggle, onTerminate, 
               <div className="pilot-queue-meta">
                 <span className="pilot-queue-index">#{idx + 1}</span>
                 <span className="pilot-queue-status">
-                  {getStatusDisplayText({ execution: item.status, review: item.reviewStatus ?? null })}
+                  {getStatusLabel(item)}
                 </span>
                 {item.chatTitle && <span className="pilot-queue-chat">{item.chatTitle}</span>}
               </div>

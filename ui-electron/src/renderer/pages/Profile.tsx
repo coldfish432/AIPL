@@ -1,8 +1,11 @@
 ﻿import React, { useEffect, useState } from "react";
 import { approveProfile, getProfile, proposeProfile, rejectProfile, ProfileData } from "../apiClient";
+import { useI18n } from "../lib/useI18n";
+import { STORAGE_KEYS } from "../config/settings";
 
 export default function Profile() {
-  const [workspace, setWorkspace] = useState(() => localStorage.getItem("aipl.workspace") || "");
+  const { t } = useI18n();
+  const [workspace, setWorkspace] = useState(() => localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,10 +23,10 @@ export default function Profile() {
     try {
       const data = await getProfile(workspace);
       setProfile(data);
-      localStorage.setItem("aipl.workspace", workspace);
+      localStorage.setItem(STORAGE_KEYS.workspaceKey, workspace);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "加载配置失败";
-      setError(message || "加载配置失败");
+      const message = err instanceof Error ? err.message : t.messages.loadFailed;
+      setError(message || t.messages.loadFailed);
     } finally {
       setLoading(false);
     }
@@ -37,10 +40,10 @@ export default function Profile() {
       const fn = kind === "propose" ? proposeProfile : kind === "approve" ? approveProfile : rejectProfile;
       const data = await fn(workspace);
       setProfile(data);
-      localStorage.setItem("aipl.workspace", workspace);
+      localStorage.setItem(STORAGE_KEYS.workspaceKey, workspace);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "更新配置失败";
-      setError(message || "更新配置失败");
+      const message = err instanceof Error ? err.message : t.messages.loadFailed;
+      setError(message || t.messages.loadFailed);
     } finally {
       setLoading(false);
     }
@@ -48,10 +51,10 @@ export default function Profile() {
 
   function confirmAndAct(kind: "propose" | "approve" | "reject") {
     if (kind === "approve") {
-      if (!window.confirm("确认通过这个配置吗？")) return;
+      if (!window.confirm(t.messages.confirmApproveProfile)) return;
     }
     if (kind === "reject") {
-      if (!window.confirm("确认拒绝这个配置吗？")) return;
+      if (!window.confirm(t.messages.confirmRejectProfile)) return;
     }
     void act(kind);
   }
@@ -64,7 +67,7 @@ export default function Profile() {
 
   useEffect(() => {
     const syncWorkspace = () => {
-      setWorkspace(localStorage.getItem("aipl.workspace") || "");
+      setWorkspace(localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
     };
     window.addEventListener("aipl-workspace-changed", syncWorkspace);
     return () => window.removeEventListener("aipl-workspace-changed", syncWorkspace);
@@ -73,25 +76,25 @@ export default function Profile() {
   return (
     <section className="stack">
       <div className="row">
-        <div className="meta">工作区：{workspace || "-"}</div>
-        <button onClick={load} disabled={loading || !workspace}>{loading ? "加载中..." : "加载"}</button>
-        <button onClick={() => confirmAndAct("propose")} disabled={loading || !workspace}>提议</button>
-        <button onClick={() => confirmAndAct("approve")} disabled={loading || !workspace}>通过</button>
-        <button onClick={() => confirmAndAct("reject")} disabled={loading || !workspace}>拒绝</button>
+        <div className="meta">{t.labels.workspace}：{workspace || "-"}</div>
+        <button onClick={load} disabled={loading || !workspace}>{loading ? t.messages.loading : t.buttons.load}</button>
+        <button onClick={() => confirmAndAct("propose")} disabled={loading || !workspace}>{t.buttons.propose}</button>
+        <button onClick={() => confirmAndAct("approve")} disabled={loading || !workspace}>{t.buttons.approve}</button>
+        <button onClick={() => confirmAndAct("reject")} disabled={loading || !workspace}>{t.buttons.reject}</button>
         {error && <span className="error">{error}</span>}
       </div>
-      {!profile && <div className="muted">暂无配置。</div>}
+      {!profile && <div className="muted">{t.messages.noProfile}</div>}
       <div className="grid">
         <div className="card">
-          <h2>硬策略</h2>
+          <h2>{t.titles.hardPolicy}</h2>
           <pre className="pre">{formatJson(profile?.effective_hard || profile?.hard_policy)}</pre>
         </div>
         <div className="card">
-          <h2>软策略草案</h2>
+          <h2>{t.titles.softDraft}</h2>
           <pre className="pre">{formatJson(profile?.soft_draft)}</pre>
         </div>
         <div className="card">
-          <h2>软策略已通过</h2>
+          <h2>{t.titles.softApproved}</h2>
           <pre className="pre">{formatJson(profile?.soft_approved)}</pre>
         </div>
       </div>

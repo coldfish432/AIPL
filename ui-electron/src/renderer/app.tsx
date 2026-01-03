@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import {
   HashRouter,
   Navigate,
@@ -16,31 +16,38 @@ import RunDetail from "./pages/RunDetail";
 import Profile from "./pages/Profile";
 import PlanDetail from "./pages/PlanDetail";
 import Pilot from "./pages/Pilot";
-import { LABELS } from "./lib/i18n";
+import { useI18n } from "./lib/useI18n";
 
 function Layout() {
   const location = useLocation();
   const params = useParams();
+  const { language, t } = useI18n();
   const title = useMemo(() => {
-    if (params.runId) return `执行 ${params.runId}`;
-    if (params.planId) return `计划 ${params.planId}`;
-    if (location.pathname.startsWith("/pilot")) return LABELS.titles.pilot;
-    if (location.pathname.startsWith("/profile")) return LABELS.titles.profile;
-    return LABELS.titles.dashboard;
-  }, [location.pathname, params.planId, params.runId]);
+    if (params.runId) return `${t.labels.run} ${params.runId}`;
+    if (params.planId) return `${t.labels.plan} ${params.planId}`;
+    if (location.pathname.startsWith("/pilot")) return t.titles.pilot;
+    if (location.pathname.startsWith("/profile")) return t.titles.profile;
+    return t.titles.dashboard;
+  }, [location.pathname, params.planId, params.runId, t]);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+    document.documentElement.setAttribute("data-lang", language);
+    document.body.setAttribute("data-lang", language);
+  }, [language]);
 
   return (
     <div className="app">
       <aside className="nav">
         <div className="brand">AIPL Console</div>
         <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/dashboard" end>
-          {LABELS.titles.dashboard}
+          {t.titles.dashboard}
         </NavLink>
         <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/pilot" end>
-          {LABELS.titles.pilot}
+          {t.titles.pilot}
         </NavLink>
         <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/profile" end>
-          {LABELS.titles.profile}
+          {t.titles.profile}
         </NavLink>
       </aside>
       <main className="content">

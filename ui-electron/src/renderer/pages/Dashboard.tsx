@@ -1,14 +1,30 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { getPlan, listPlans, listRuns, PlanSummary, RunSummary } from "../apiClient";
-import { LABELS } from "../lib/i18n";
+import { useI18n } from "../lib/useI18n";
+import { LanguageSwitch } from "../components/LanguageSwitch";
 import { formatTimestamp, normalizePlan, normalizeRun } from "../lib/normalize";
-import { selectProgressFromRun } from "../lib/progress";
 import { getStatusClassName, getStatusDisplayText, normalizeBackendStatus, resolveStatus, UnifiedStatus } from "../lib/status";
+import { STORAGE_KEYS } from "../config/settings";
 
 type Props = {
   onSelectRun: (runId: string, planId?: string) => void;
   onSelectPlan: (planId: string) => void;
 };
+
+function getRunKey(run: RunSummary): string {
+  return String(run.run_id ?? run.runId ?? run.id ?? "");
+}
+
+function loadRunOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.runOrderKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 function matchesQuery(value: unknown, query: string) {
   if (!query) return true;
@@ -16,11 +32,12 @@ function matchesQuery(value: unknown, query: string) {
 }
 
 export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
+  const { language, t, toggleLanguage } = useI18n();
   const [plans, setPlans] = useState<PlanSummary[]>([]);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState(() => localStorage.getItem("aipl.workspace") || "");
+  const [workspace, setWorkspace] = useState(() => localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
   const [planQuery, setPlanQuery] = useState("");
   const [runQuery, setRunQuery] = useState("");
   const [planPage, setPlanPage] = useState(1);
@@ -35,11 +52,46 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
     try {
       const [p, r] = await Promise.all([listPlans(), listRuns()]);
       setPlans(p);
-      setRuns(r);
+      setRuns((prev) => {
+        if (prev.length === 0) return r;
+        const order = loadRunOrder();
+        const nextById = new Map(r.map((item) => [getRunKey(item), item]));
+        const merged: RunSummary[] = [];
+        const seen = new Set<string>();
+        const base = order.length > 0 ? order : prev.map((item) => getRunKey(item)).filter((key) => key);
+        for (const key of base) {
+          const nextItem = nextById.get(key);
+          if (nextItem) {
+            merged.push(nextItem);
+            seen.add(key);
+          }
+        }
+        if (base.length === 0) {
+          for (const item of prev) {
+          const key = getRunKey(item);
+          const nextItem = nextById.get(key);
+          if (nextItem) {
+            merged.push(nextItem);
+            seen.add(key);
+          } else {
+            merged.push(item);
+            seen.add(key);
+          }
+          }
+        }
+        for (const item of r) {
+          const key = getRunKey(item);
+          if (seen.has(key)) continue;
+          merged.push(item);
+        }
+        const nextOrder = merged.map((item) => getRunKey(item)).filter((key) => key);
+        localStorage.setItem(STORAGE_KEYS.runOrderKey, JSON.stringify(nextOrder));
+        return merged;
+      });
       setStatusOverrides({});
     } catch (err) {
-      const message = err instanceof Error ? err.message : "加载失败";
-      setError(message || "加载失败");
+      const message = err instanceof Error ? err.message : t.messages.loadFailed;
+      setError(message || t.messages.loadFailed);
     } finally {
       setLoading(false);
     }
@@ -56,9 +108,9 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
   useEffect(() => {
     const trimmed = workspace.trim();
     if (trimmed) {
-      localStorage.setItem("aipl.workspace", trimmed);
+      localStorage.setItem(STORAGE_KEYS.workspaceKey, trimmed);
     } else {
-      localStorage.removeItem("aipl.workspace");
+      localStorage.removeItem(STORAGE_KEYS.workspaceKey);
     }
     window.dispatchEvent(new Event("aipl-workspace-changed"));
   }, [workspace]);
@@ -134,9 +186,7 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
           const total = snapshotTasks.length;
           const done = snapshotTasks.filter((task: { status?: string }) => String(task.status || "").toLowerCase() === "done").length;
           const progress = total > 0 ? Math.round((done / total) * 100) : undefined;
-          if (["queued", "starting", "running"].includes(unified.execution)) {
-            updates[run.id] = { status: unified, progress };
-          }
+          updates[run.id] = { status: unified, progress };
         } catch {
           // ignore fetch errors
         }
@@ -150,41 +200,51 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
     };
   }, [pagedRuns]);
 
+  const getLocalizedStatusText = (status: UnifiedStatus) => {
+    if (status.execution === "completed" && status.review) {
+      return t.status[status.review] || getStatusDisplayText(status);
+    }
+    return t.status[status.execution] || getStatusDisplayText(status);
+  };
+
   return (
     <section className="stack">
       <div className="row">
         <input
           className="input"
-          placeholder="工作区路径"
+          placeholder={t.labels.workspacePath}
           value={workspace}
           onChange={(e) => setWorkspace(e.target.value)}
         />
-        <button onClick={load} disabled={loading}>{loading ? "加载中..." : LABELS.buttons.refresh}</button>
+        <button onClick={load} disabled={loading}>
+          {loading ? t.messages.loading : t.buttons.refresh}
+        </button>
+        <LanguageSwitch language={language} onToggle={toggleLanguage} />
         {error && <span className="error">{error}</span>}
       </div>
       <div className="grid">
         <div className="card">
-          <h2>计划</h2>
+          <h2>{t.titles.plans}</h2>
           <div className="row">
             <input
               className="input compact"
-              placeholder="搜索计划"
+              placeholder={t.labels.searchPlans}
               value={planQuery}
               onChange={(e) => setPlanQuery(e.target.value)}
             />
             <div className="row">
               <button onClick={() => setPlanPage((prev) => Math.max(1, prev - 1))} disabled={planPageSafe <= 1}>
-                上一页
+                {t.buttons.prevPage}
               </button>
               <button onClick={() => setPlanPage((prev) => Math.min(planTotalPages, prev + 1))} disabled={planPageSafe >= planTotalPages}>
-                下一页
+                {t.buttons.nextPage}
               </button>
               <span className="muted">{planPageSafe} / {planTotalPages}</span>
             </div>
           </div>
           <div className="list">
-            {plans.length === 0 && <div className="muted">{LABELS.messages.noPlans}</div>}
-            {plans.length > 0 && filteredPlans.length === 0 && <div className="muted">没有匹配的计划。</div>}
+            {plans.length === 0 && <div className="muted">{t.messages.noPlans}</div>}
+            {plans.length > 0 && filteredPlans.length === 0 && <div className="muted">{t.messages.noMatchingPlans}</div>}
             {pagedPlans.map((plan) => {
               const updated = formatTimestamp(plan.updatedAt);
               const tasksCount = plan.tasksCount;
@@ -192,49 +252,51 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
                 <button key={String(plan.id)} className="list-item button" onClick={() => onSelectPlan(String(plan.id))}>
                   <div>
                     <div className="title">{String(plan.id)}</div>
-                    {updated && <div className="meta">更新 {updated}</div>}
+                    {updated && <div className="meta">{t.labels.updated} {updated}</div>}
                   </div>
-                  {typeof tasksCount === "number" && <div className="pill">{tasksCount} 任务</div>}
+                  {typeof tasksCount === "number" && (
+                    <div className="pill">{tasksCount} {t.labels.tasks}</div>
+                  )}
                 </button>
               );
             })}
           </div>
         </div>
         <div className="card">
-          <h2>执行</h2>
+          <h2>{t.titles.runs}</h2>
           <div className="row">
             <input
               className="input compact"
-              placeholder="搜索执行"
+              placeholder={t.labels.searchRuns}
               value={runQuery}
               onChange={(e) => setRunQuery(e.target.value)}
             />
             <div className="row">
               <button onClick={() => setRunPage((prev) => Math.max(1, prev - 1))} disabled={runPageSafe <= 1}>
-                上一页
+                {t.buttons.prevPage}
               </button>
               <button onClick={() => setRunPage((prev) => Math.min(runTotalPages, prev + 1))} disabled={runPageSafe >= runTotalPages}>
-                下一页
+                {t.buttons.nextPage}
               </button>
               <span className="muted">{runPageSafe} / {runTotalPages}</span>
             </div>
           </div>
           <div className="list">
-            {runs.length === 0 && <div className="muted">{LABELS.messages.noRuns}</div>}
-            {runs.length > 0 && filteredRuns.length === 0 && <div className="muted">没有匹配的执行。</div>}
+            {runs.length === 0 && <div className="muted">{t.messages.noRuns}</div>}
+            {runs.length > 0 && filteredRuns.length === 0 && <div className="muted">{t.messages.noMatchingRuns}</div>}
             {pagedRuns.map((run) => {
               const override = statusOverrides[run.id];
               const unified = override ? override.status : normalizeBackendStatus(run.status || "unknown");
-              const statusText = getStatusDisplayText(unified);
+              const statusText = getLocalizedStatusText(unified);
               const updated = formatTimestamp(run.updatedAt);
-              const progress = override?.progress ?? selectProgressFromRun(run as unknown as Record<string, unknown>);
+              const progress = override?.progress;
               return (
                 <button key={String(run.id)} className="list-item button" onClick={() => onSelectRun(String(run.id), run.planId || undefined)}>
                   <div>
                     <div className="title">{String(run.id)}</div>
-                    <div className="meta">状态 {statusText}</div>
-                    {updated && <div className="meta">更新 {updated}</div>}
-                    {progress !== null && (
+                    <div className="meta status-text">{t.labels.status} {statusText}</div>
+                    {updated && <div className="meta">{t.labels.updated} {updated}</div>}
+                    {typeof progress === "number" && (
                       <div className="progress">
                         <div className="progress-bar" style={{ width: `${progress}%` }} />
                       </div>

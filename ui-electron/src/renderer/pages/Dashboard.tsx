@@ -1,9 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity,
+  CheckCircle,
+  FileText,
+  Play,
+  XCircle
+} from "lucide-react";
 import { getPlan, listPlans, listRuns, PlanSummary, RunSummary } from "../apiClient";
 import { useI18n } from "../lib/useI18n";
-import { LanguageSwitch } from "../components/LanguageSwitch";
 import { formatTimestamp, normalizePlan, normalizeRun } from "../lib/normalize";
-import { getStatusClassName, getStatusDisplayText, normalizeBackendStatus, resolveStatus, UnifiedStatus } from "../lib/status";
+import { getStatusDisplayText, normalizeBackendStatus, resolveStatus, UnifiedStatus } from "../lib/status";
 import { STORAGE_KEYS } from "../config/settings";
 
 type Props = {
@@ -26,31 +32,33 @@ function loadRunOrder(): string[] {
   }
 }
 
-function matchesQuery(value: unknown, query: string) {
-  if (!query) return true;
-  return String(value ?? "").toLowerCase().includes(query);
+function getTimestamp(value: unknown): number {
+  if (!value) return 0;
+  if (typeof value === "number") return value;
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function normalizeWorkspacePath(value: string): string {
+  return value.replace(/\\/g, "/").trim().toLowerCase();
 }
 
 export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
-  const { language, t, toggleLanguage } = useI18n();
+  const { t } = useI18n();
+  const [workspaceKey, setWorkspaceKey] = useState(() => localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
   const [plans, setPlans] = useState<PlanSummary[]>([]);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState(() => localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
-  const [planQuery, setPlanQuery] = useState("");
-  const [runQuery, setRunQuery] = useState("");
-  const [planPage, setPlanPage] = useState(1);
-  const [runPage, setRunPage] = useState(1);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, { status: UnifiedStatus; progress?: number }>>({});
   const statusOverridesRef = useRef<Record<string, { status: UnifiedStatus; progress?: number }>>({});
-  const pageSize = 6;
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [p, r] = await Promise.all([listPlans(), listRuns()]);
+      const workspace = workspaceKey || undefined;
+      const [p, r] = await Promise.all([listPlans(workspace), listRuns(workspace)]);
       setPlans(p);
       setRuns((prev) => {
         if (prev.length === 0) return r;
@@ -102,26 +110,22 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
   }, []);
 
   useEffect(() => {
+    const syncWorkspace = () => {
+      setWorkspaceKey(localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
+    };
+    window.addEventListener("aipl-workspace-changed", syncWorkspace);
+    return () => window.removeEventListener("aipl-workspace-changed", syncWorkspace);
+  }, []);
+
+  useEffect(() => {
+    if (workspaceKey) {
+      void load();
+    }
+  }, [workspaceKey]);
+
+  useEffect(() => {
     statusOverridesRef.current = statusOverrides;
   }, [statusOverrides]);
-
-  useEffect(() => {
-    const trimmed = workspace.trim();
-    if (trimmed) {
-      localStorage.setItem(STORAGE_KEYS.workspaceKey, trimmed);
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.workspaceKey);
-    }
-    window.dispatchEvent(new Event("aipl-workspace-changed"));
-  }, [workspace]);
-
-  useEffect(() => {
-    setPlanPage(1);
-  }, [planQuery]);
-
-  useEffect(() => {
-    setRunPage(1);
-  }, [runQuery]);
 
   const normalizedPlans = useMemo(
     () => plans.map((plan) => normalizePlan(plan as Record<string, unknown>)),
@@ -132,46 +136,39 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
     [runs]
   );
 
-  const filteredPlans = useMemo(() => {
-    const query = planQuery.trim().toLowerCase();
-    if (!query) return normalizedPlans;
-    return normalizedPlans.filter((plan) => {
-      return matchesQuery(plan.id, query) || matchesQuery(plan.inputTask, query);
+  const sortedPlans = useMemo(() => {
+    return [...normalizedPlans].sort((a, b) => getTimestamp(b.updatedAt) - getTimestamp(a.updatedAt));
+  }, [normalizedPlans]);
+
+  const sortedRuns = useMemo(() => {
+    return [...normalizedRuns].sort((a, b) => getTimestamp(b.updatedAt) - getTimestamp(a.updatedAt));
+  }, [normalizedRuns]);
+
+  const allRuns = useMemo(() => {
+    if (!workspaceKey) return sortedRuns;
+    const normalizedWorkspace = normalizeWorkspacePath(workspaceKey);
+    return sortedRuns.filter((run) => {
+      const main = run.workspaceMainRoot ? normalizeWorkspacePath(run.workspaceMainRoot) : "";
+      const stage = run.workspaceStageRoot ? normalizeWorkspacePath(run.workspaceStageRoot) : "";
+      return (main && main.startsWith(normalizedWorkspace)) || (stage && stage.startsWith(normalizedWorkspace));
     });
-  }, [planQuery, normalizedPlans]);
+  }, [sortedRuns, workspaceKey]);
 
-  const filteredRuns = useMemo(() => {
-    const query = runQuery.trim().toLowerCase();
-    if (!query) return normalizedRuns;
-    return normalizedRuns.filter((run) => {
-      return matchesQuery(run.id, query) || matchesQuery(run.task, query) || matchesQuery(run.status, query);
+  const allPlans = useMemo(() => {
+    if (!workspaceKey) return sortedPlans;
+    const normalizedWorkspace = normalizeWorkspacePath(workspaceKey);
+    const planIdsFromRuns = new Set(allRuns.map((run) => run.planId).filter((id): id is string => Boolean(id)));
+    return sortedPlans.filter((plan) => {
+      if (plan.workspacePath) {
+        return normalizeWorkspacePath(plan.workspacePath).startsWith(normalizedWorkspace);
+      }
+      return planIdsFromRuns.has(plan.id);
     });
-  }, [runQuery, normalizedRuns]);
-
-  const planTotalPages = Math.max(1, Math.ceil(filteredPlans.length / pageSize));
-  const runTotalPages = Math.max(1, Math.ceil(filteredRuns.length / pageSize));
-
-  useEffect(() => {
-    if (planPage > planTotalPages) {
-      setPlanPage(planTotalPages);
-    }
-  }, [planPage, planTotalPages]);
-
-  useEffect(() => {
-    if (runPage > runTotalPages) {
-      setRunPage(runTotalPages);
-    }
-  }, [runPage, runTotalPages]);
-
-  const planPageSafe = Math.min(planPage, planTotalPages);
-  const runPageSafe = Math.min(runPage, runTotalPages);
-
-  const pagedPlans = filteredPlans.slice((planPageSafe - 1) * pageSize, planPageSafe * pageSize);
-  const pagedRuns = filteredRuns.slice((runPageSafe - 1) * pageSize, runPageSafe * pageSize);
+  }, [sortedPlans, allRuns, workspaceKey]);
 
   useEffect(() => {
     let active = true;
-    const runsToCheck = pagedRuns.filter((run) => run.planId && !statusOverridesRef.current[run.id]);
+    const runsToCheck = allRuns.filter((run) => run.planId && !statusOverridesRef.current[run.id]);
     if (runsToCheck.length === 0) return () => {
       active = false;
     };
@@ -198,7 +195,7 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
     return () => {
       active = false;
     };
-  }, [pagedRuns]);
+  }, [allRuns]);
 
   const getLocalizedStatusText = (status: UnifiedStatus) => {
     if (status.execution === "completed" && status.review) {
@@ -207,106 +204,185 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
     return t.status[status.execution] || getStatusDisplayText(status);
   };
 
+  const stats = useMemo(() => {
+    const totalPlans = normalizedPlans.length;
+    const totalRuns = normalizedRuns.length;
+    const totalTasks = normalizedPlans.reduce((sum, plan) => sum + (plan.tasksCount || 0), 0);
+    let runningRuns = 0;
+    let completedRuns = 0;
+    for (const run of normalizedRuns) {
+      const unified = normalizeBackendStatus(run.status || "unknown");
+      if (["queued", "starting", "running", "retrying"].includes(unified.execution)) {
+        runningRuns += 1;
+      }
+      if (unified.execution === "completed") {
+        completedRuns += 1;
+      }
+    }
+    const successRate = totalRuns > 0 ? Math.round((completedRuns / totalRuns) * 100) : 0;
+    return {
+      totalPlans,
+      totalRuns,
+      totalTasks,
+      runningRuns,
+      completedRuns,
+      successRate
+    };
+  }, [normalizedPlans, normalizedRuns]);
+
+
+
+  const metrics = useMemo(() => {
+    const runningRatio = stats.totalRuns > 0 ? Math.round((stats.runningRuns / stats.totalRuns) * 100) : 0;
+    return [
+      {
+        id: "success",
+        label: t.labels.successRate,
+        value: stats.successRate,
+        display: `${stats.successRate}%`,
+        variant: "success"
+      },
+      {
+        id: "running",
+        label: t.labels.activeRuns,
+        value: runningRatio,
+        display: `${stats.runningRuns}/${stats.totalRuns || 0}`,
+        variant: "running"
+      }
+    ];
+  }, [stats, t]);
+
   return (
-    <section className="stack">
-      <div className="row">
-        <input
-          className="input"
-          placeholder={t.labels.workspacePath}
-          value={workspace}
-          onChange={(e) => setWorkspace(e.target.value)}
-        />
-        <button onClick={load} disabled={loading}>
-          {loading ? t.messages.loading : t.buttons.refresh}
-        </button>
-        <LanguageSwitch language={language} onToggle={toggleLanguage} />
-        {error && <span className="error">{error}</span>}
+    <section className="dashboard dashboard-v2">
+      <div className="dashboard-header">
+        <div className="dashboard-title-group">
+          <p className="dashboard-subtitle">
+            {t.labels.stats} / {t.titles.plans} / {t.titles.runs}
+          </p>
+        </div>
+        <div className="dashboard-actions">
+          <button className="dashboard-primary" onClick={load} disabled={loading}>
+            {loading ? t.messages.loading : t.buttons.refresh}
+          </button>
+        </div>
       </div>
-      <div className="grid">
-        <div className="card">
-          <h2>{t.titles.plans}</h2>
-          <div className="row">
-            <input
-              className="input compact"
-              placeholder={t.labels.searchPlans}
-              value={planQuery}
-              onChange={(e) => setPlanQuery(e.target.value)}
-            />
-            <div className="row">
-              <button onClick={() => setPlanPage((prev) => Math.max(1, prev - 1))} disabled={planPageSafe <= 1}>
-                {t.buttons.prevPage}
-              </button>
-              <button onClick={() => setPlanPage((prev) => Math.min(planTotalPages, prev + 1))} disabled={planPageSafe >= planTotalPages}>
-                {t.buttons.nextPage}
-              </button>
-              <span className="muted">{planPageSafe} / {planTotalPages}</span>
+
+      {error && <div className="dashboard-alert">{error}</div>}
+
+      <div className="dashboard-hero-grid">
+        <div className="dashboard-hero-card plans">
+          <div className="dashboard-hero-header">
+            <div className="dashboard-hero-icon plans">
+              <FileText size={18} />
+            </div>
+            <span className="dashboard-hero-badge">{t.labels.tasks} {stats.totalTasks}</span>
+          </div>
+          <div className="dashboard-hero-value">{stats.totalPlans}</div>
+          <div className="dashboard-hero-label">{t.titles.plans}</div>
+        </div>
+        <div className="dashboard-hero-card runs">
+          <div className="dashboard-hero-header">
+            <div className="dashboard-hero-icon runs">
+              <Play size={18} />
+            </div>
+            <span className="dashboard-hero-badge">{stats.runningRuns} {t.status.running}</span>
+          </div>
+          <div className="dashboard-hero-value">{stats.totalRuns}</div>
+          <div className="dashboard-hero-label">{t.titles.runs}</div>
+        </div>
+        <div className="dashboard-hero-card completed">
+          <div className="dashboard-hero-header">
+            <div className="dashboard-hero-icon completed">
+              <CheckCircle size={18} />
+            </div>
+            <span className="dashboard-hero-badge">{stats.totalRuns ? `${stats.successRate}%` : "-"}</span>
+          </div>
+          <div className="dashboard-hero-value">{stats.completedRuns}</div>
+          <div className="dashboard-hero-label">{t.status.completed}</div>
+        </div>
+      </div>
+
+      <div className="dashboard-main-grid dashboard-main-grid-half">
+        <div className="dashboard-panel">
+          <div className="dashboard-panel-title-row">
+            <div className="dashboard-panel-title">
+              <FileText size={16} />
+              <span>{t.titles.plans}</span>
             </div>
           </div>
-          <div className="list">
-            {plans.length === 0 && <div className="muted">{t.messages.noPlans}</div>}
-            {plans.length > 0 && filteredPlans.length === 0 && <div className="muted">{t.messages.noMatchingPlans}</div>}
-            {pagedPlans.map((plan) => {
-              const updated = formatTimestamp(plan.updatedAt);
-              const tasksCount = plan.tasksCount;
+          <div className="dashboard-list dashboard-scroll-list">
+            {allPlans.length === 0 && <div className="dashboard-muted">{t.messages.noPlans}</div>}
+            {allPlans.map((plan) => (
+              <button
+                key={plan.id}
+                type="button"
+                className="dashboard-list-item"
+                onClick={() => onSelectPlan(plan.id)}
+              >
+                <div className="dashboard-list-main">
+                  <div className="dashboard-list-title">{plan.inputTask || `${t.labels.plan} ${plan.id}`}</div>
+                  <div className="dashboard-list-meta">{t.labels.updated} {formatTimestamp(plan.updatedAt) || "-"}</div>
+                </div>
+                <div className="dashboard-list-tail">
+                  <span className="dashboard-pill">{t.labels.tasks} {plan.tasksCount ?? "-"}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="dashboard-panel">
+          <div className="dashboard-panel-title-row">
+            <div className="dashboard-panel-title">
+              <Play size={16} />
+              <span>{t.titles.runs}</span>
+            </div>
+          </div>
+          <div className="dashboard-list dashboard-scroll-list">
+            {allRuns.length === 0 && <div className="dashboard-muted">{t.messages.noRuns}</div>}
+            {allRuns.map((run) => {
+              const unified = normalizeBackendStatus(run.status || "unknown");
+              const statusText = getLocalizedStatusText(unified);
               return (
-                <button key={String(plan.id)} className="list-item button" onClick={() => onSelectPlan(String(plan.id))}>
-                  <div>
-                    <div className="title">{String(plan.id)}</div>
-                    {updated && <div className="meta">{t.labels.updated} {updated}</div>}
+                <button
+                  key={run.id}
+                  type="button"
+                  className="dashboard-list-item"
+                  onClick={() => onSelectRun(run.id, run.planId)}
+                >
+                  <div className="dashboard-list-main">
+                    <div className="dashboard-list-title">{run.task || `${t.labels.run} ${run.id}`}</div>
+                    <div className="dashboard-list-meta">{t.labels.updated} {formatTimestamp(run.updatedAt) || "-"}</div>
                   </div>
-                  {typeof tasksCount === "number" && (
-                    <div className="pill">{tasksCount} {t.labels.tasks}</div>
-                  )}
+                  <div className="dashboard-list-tail">
+                    <span className={`dashboard-pill status-${unified.execution}`}>{statusText}</span>
+                  </div>
                 </button>
               );
             })}
           </div>
         </div>
-        <div className="card">
-          <h2>{t.titles.runs}</h2>
-          <div className="row">
-            <input
-              className="input compact"
-              placeholder={t.labels.searchRuns}
-              value={runQuery}
-              onChange={(e) => setRunQuery(e.target.value)}
-            />
-            <div className="row">
-              <button onClick={() => setRunPage((prev) => Math.max(1, prev - 1))} disabled={runPageSafe <= 1}>
-                {t.buttons.prevPage}
-              </button>
-              <button onClick={() => setRunPage((prev) => Math.min(runTotalPages, prev + 1))} disabled={runPageSafe >= runTotalPages}>
-                {t.buttons.nextPage}
-              </button>
-              <span className="muted">{runPageSafe} / {runTotalPages}</span>
+      </div>
+
+      <div className="dashboard-panel">
+        <div className="dashboard-panel-title-row">
+          <div className="dashboard-panel-title">
+            <Activity size={16} />
+            <span>{t.labels.systemResources}</span>
+          </div>
+        </div>
+        <div className="dashboard-metrics-grid">
+          {metrics.map((metric) => (
+            <div key={metric.id} className="dashboard-metric">
+              <div className="dashboard-metric-header">
+                <span>{metric.label}</span>
+                <span className="dashboard-metric-value">{metric.display}</span>
+              </div>
+              <div className="dashboard-metric-bar">
+                <div className={`dashboard-metric-bar-fill ${metric.variant}`} style={{ width: `${metric.value}%` }} />
+              </div>
             </div>
-          </div>
-          <div className="list">
-            {runs.length === 0 && <div className="muted">{t.messages.noRuns}</div>}
-            {runs.length > 0 && filteredRuns.length === 0 && <div className="muted">{t.messages.noMatchingRuns}</div>}
-            {pagedRuns.map((run) => {
-              const override = statusOverrides[run.id];
-              const unified = override ? override.status : normalizeBackendStatus(run.status || "unknown");
-              const statusText = getLocalizedStatusText(unified);
-              const updated = formatTimestamp(run.updatedAt);
-              const progress = override?.progress;
-              return (
-                <button key={String(run.id)} className="list-item button" onClick={() => onSelectRun(String(run.id), run.planId || undefined)}>
-                  <div>
-                    <div className="title">{String(run.id)}</div>
-                    <div className="meta status-text">{t.labels.status} {statusText}</div>
-                    {updated && <div className="meta">{t.labels.updated} {updated}</div>}
-                    {typeof progress === "number" && (
-                      <div className="progress">
-                        <div className="progress-bar" style={{ width: `${progress}%` }} />
-                      </div>
-                    )}
-                  </div>
-                  <div className={`pill ${getStatusClassName(unified)}`}>{statusText}</div>
-                </button>
-              );
-            })}
-          </div>
+          ))}
         </div>
       </div>
     </section>

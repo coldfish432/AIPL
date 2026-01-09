@@ -16,15 +16,7 @@ public class ProfileService {
         return engine.profile("get", workspace);
     }
 
-    public JsonNode propose(String workspace) throws Exception {
-        return engine.profile("propose", workspace);
-    }
-
-    public JsonNode approve(String workspace) throws Exception {
-        return engine.profile("approve", workspace);
-    }
-
-    public JsonNode reject(String workspace) throws Exception {
-        return engine.profile("reject", workspace);
+    public JsonNode update(String workspace, JsonNode userHard) throws Exception {
+        return engine.profileUpdate(workspace, userHard);
     }
 }

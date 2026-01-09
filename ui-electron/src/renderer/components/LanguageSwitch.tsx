@@ -13,10 +13,10 @@ export function LanguageSwitch({ language, onToggle, className = "" }: LanguageS
     <button
       className={`language-switch ${className}`}
       onClick={onToggle}
-      title={language === "zh" ? "Switch to English" : "åˆ‡æ¢åˆ°ä¸­æ–‡"}
-      aria-label={language === "zh" ? "Switch to English" : "åˆ‡æ¢åˆ°ä¸­æ–‡"}
+      title={language === "zh" ? "Switch to English" : "ÇÐ»»µ½ÖÐÎÄ"}
+      aria-label={language === "zh" ? "Switch to English" : "ÇÐ»»µ½ÖÐÎÄ"}
     >
-      <span className={`lang-option ${language === "zh" ? "active" : ""}`}>ä¸­</span>
+      <span className={`lang-option ${language === "zh" ? "active" : ""}`}>ÖÐ</span>
       <span className="lang-divider">/</span>
       <span className={`lang-option ${language === "en" ? "active" : ""}`}>EN</span>
     </button>
@@ -37,7 +37,7 @@ export function LanguageSelect({ language, onChange, className = "" }: LanguageS
       onChange={(e) => onChange(e.target.value as Language)}
       aria-label="Select language"
     >
-      <option value="zh">ä¸­æ–‡</option>
+      <option value="zh">ÖÐÎÄ</option>
       <option value="en">English</option>
     </select>
   );

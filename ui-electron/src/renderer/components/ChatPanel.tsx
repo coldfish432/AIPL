@@ -6,11 +6,12 @@ type Props = {
   session: ChatSession | null;
   loading: boolean;
   confirmLoading: boolean;
-  onEnqueuePlan: (planId: string, planText: string) => void;
+  onStartRun: (planId: string, planText: string) => void;
   onStartFlow: () => void;
   onConfirmPlan: () => void;
   onCancelPlan: () => void;
   onUpdateFinalPlan: (value: string) => void;
+  onEnqueuePlan?: (planId: string | null, planText: string, session: ChatSession | null) => void;
 };
 
 function getRoleLabel(role: string, labels: { roleSystem: string; roleUser: string; roleAssistant: string }): string {
@@ -22,57 +23,64 @@ export default function ChatPanel({
   session,
   loading,
   confirmLoading,
-  onEnqueuePlan,
+  onStartRun,
   onStartFlow,
   onConfirmPlan,
   onCancelPlan,
-  onUpdateFinalPlan
+  onUpdateFinalPlan,
+  onEnqueuePlan
 }: Props) {
   const { t } = useI18n();
 
   if (!session) {
-    return <div className="muted">{t.messages.needCreateChat}</div>;
+    return <div className="page-muted">{t.messages.needCreateChat}</div>;
   }
 
   return (
-    <div className="chat">
+    <div className="assistant-chat">
       {session.messages.length === 0 && (
-        <div className="muted">{t.messages.needDescribeTask}</div>
+        <div className="page-muted">{t.messages.needDescribeTask}</div>
       )}
       {session.messages.map((msg, idx) => (
-        <div key={idx} className={`chat-msg ${msg.role}`}>
-          <div className="chat-role">{getRoleLabel(msg.role, t.labels)}</div>
-          <div className="chat-content">{msg.content}</div>
+        <div key={idx} className={`assistant-message ${msg.role}`}>
+          <div className="assistant-role">{getRoleLabel(msg.role, t.labels)}</div>
+          <div className="assistant-bubble">{msg.content}</div>
           {msg.kind === "plan" && (
-            <div className="chat-actions">
-              <button
+            <div className="assistant-actions">
+              <button className="button-secondary"
                 onClick={() => {
                   const planId = msg.planId || session.planId;
+                  const planText = msg.content || session.planText || "";
                   if (!planId) return;
-                  onEnqueuePlan(planId, session.planText || "");
+                  onStartRun(planId, planText);
                 }}
                 disabled={confirmLoading || !session.planId}
               >
-                {t.buttons.addQueue}
+                {t.labels.run}
               </button>
-              <button onClick={onStartFlow} disabled={loading}>
+              <button className="button-secondary" onClick={onStartFlow} disabled={loading}>
                 {loading ? t.messages.planLoading : t.buttons.replan}
               </button>
+              {onEnqueuePlan && (
+                <button className="button-secondary" onClick={() => onEnqueuePlan(msg.planId || session.planId, msg.content, session)} disabled={!msg.planId && !session.planId}>
+                  {t.buttons.addQueue}
+                </button>
+              )}
             </div>
           )}
           {msg.kind === "confirm" && session.awaitingConfirm && (
-            <div className="chat-actions">
+            <div className="assistant-actions">
               <textarea
-                className="textarea"
+                className="assistant-textarea compact"
                 placeholder={t.labels.finalPlan}
                 value={session.finalPlanText || ""}
                 onChange={(e) => onUpdateFinalPlan(e.target.value)}
                 rows={2}
               />
-              <button onClick={onConfirmPlan} disabled={loading}>
+              <button className="button-primary" onClick={onConfirmPlan} disabled={loading}>
                 {loading ? t.messages.planLoading : t.buttons.confirm}
               </button>
-              <button className="danger" onClick={onCancelPlan} disabled={loading}>
+              <button className="button-danger" onClick={onCancelPlan} disabled={loading}>
                 {t.buttons.cancel}
               </button>
             </div>

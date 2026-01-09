@@ -527,7 +527,12 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
   }
 
   return (
-    <section className="stack">
+    <section className="page">
+      <div className="page-header">
+        <div>
+          <p className="page-subtitle">{t.labels.runId}: {runId}</p>
+        </div>
+      </div>
       <RunActionBar
         onBack={onBack}
         onDeleteRun={handleDeleteRun}
@@ -551,40 +556,41 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
         unifiedStatus={unifiedStatus}
         statusText={statusText}
         workflowStage={workflowStage}
-        policy={runInfo?.policy || "-"}
         task={task}
         updated={updated || "-"}
       />
       {hasPlanId && (
-        <div className="card">
-          <h2>{t.titles.taskChainProgress}</h2>
-          {planLoading && <div className="muted">{t.messages.taskChainLoading}</div>}
-          {planError && <div className="error">{planError}</div>}
+        <div className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">{t.titles.taskChainProgress}</h2>
+          </div>
+          {planLoading && <div className="page-muted">{t.messages.taskChainLoading}</div>}
+          {planError && <div className="page-alert">{planError}</div>}
           {!planLoading && planTasks.length > 0 && (
             <>
               <div className="progress large">
                 <div className="progress-bar" style={{ width: `${taskProgress}%` }} />
               </div>
-              <div className="row">
-                <span className="pill">{taskProgress}%</span>
-                <span className="pill subtle">{t.labels.tasksDone} {taskStats.done}/{taskStats.total}</span>
-                {taskStats.doing > 0 && <span className="pill warn">{t.labels.tasksDoing} {taskStats.doing}</span>}
-                {taskStats.failed > 0 && <span className="pill error">{t.labels.tasksFailed} {taskStats.failed}</span>}
+              <div className="status-tags">
+                <span className="status-pill">{taskProgress}%</span>
+                <span className="status-pill subtle">{t.labels.tasksDone} {taskStats.done}/{taskStats.total}</span>
+                {taskStats.doing > 0 && <span className="status-pill warn">{t.labels.tasksDoing} {taskStats.doing}</span>}
+                {taskStats.failed > 0 && <span className="status-pill error">{t.labels.tasksFailed} {taskStats.failed}</span>}
               </div>
-              <div className="list">
+              <div className="card-list">
                 {planTasks.map((taskItem, idx) => {
                   const taskId = taskItem.step_id || taskItem.id || taskItem.task_id || `task-${idx + 1}`;
                   const title = taskItem.title || taskItem.name || `${t.labels.task} ${idx + 1}`;
                   const status = String(taskItem.status || "todo").toLowerCase();
                   const statusLabel = t.status[status as keyof typeof t.status] || status;
                   return (
-                    <div key={taskId} className="list-item task-item">
-                      <div>
-                        <div className="title">{title}</div>
-                        <div className="meta">{t.labels.taskId} {taskId}</div>
-                        {taskItem.description && <div className="meta">{taskItem.description}</div>}
+                    <div key={taskId} className="card-item">
+                      <div className="card-item-main">
+                        <div className="card-item-title">{title}</div>
+                        <div className="card-item-meta">{t.labels.taskId} {taskId}</div>
+                        {taskItem.description && <div className="card-item-meta">{taskItem.description}</div>}
                       </div>
-                      <div className={`pill ${status}`}>{statusLabel}</div>
+                      <div className={`status-pill ${status}`}>{statusLabel}</div>
                     </div>
                   );
                 })}
@@ -592,58 +598,64 @@ export default function RunDetail({ runId, planId, onBack }: Props) {
             </>
           )}
           {!planLoading && planTasks.length === 0 && !planError && (
-            <div className="muted">{t.messages.taskChainEmptyData}</div>
+            <div className="page-muted">{t.messages.taskChainEmptyData}</div>
           )}
         </div>
       )}
       {awaitingReview && (
-        <div className="card">
-          <h2>{t.titles.reviewApply}</h2>
-          {reviewLoading && <div className="muted">{t.messages.reviewLoading}</div>}
-          {reviewError && <div className="error">{reviewError}</div>}
+        <div className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">{t.titles.reviewApply}</h2>
+          </div>
+          {reviewLoading && <div className="page-muted">{t.messages.reviewLoading}</div>}
+          {reviewError && <div className="page-alert">{reviewError}</div>}
           {changedFiles.length > 0 && (
-            <div className="list">
+            <div className="card-list">
               {changedFiles.map((item, idx) => (
-                <div key={`${item.path}-${idx}`} className="list-item">
+                <div key={`${item.path}-${idx}`} className="card-item">
                   <button className="file-link" onClick={() => handleOpenChangedFile(item.path)}>
                     {item.path}
                   </button>
-                  <div className="pill">{item.status}</div>
+                  <div className="status-pill">{item.status}</div>
                 </div>
               ))}
             </div>
           )}
           {patchsetText && <DiffViewer diffText={patchsetText} changedFiles={changedFiles} />}
-          <div className="row">
-            <button onClick={handleApply} disabled={actionLoading}>{t.buttons.applyReview}</button>
-            <button onClick={handleDiscard} disabled={actionLoading}>{t.buttons.discardChanges}</button>
+          <div className="panel-actions">
+            <button className="button-primary" onClick={handleApply} disabled={actionLoading}>{t.buttons.applyReview}</button>
+            <button className="button-secondary" onClick={handleDiscard} disabled={actionLoading}>{t.buttons.discardChanges}</button>
           </div>
         </div>
       )}
 
       {failed && (
-        <div className="card">
-          <h2>{t.titles.rework}</h2>
-          {failureError && <div className="error">{failureError}</div>}
+        <div className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">{t.titles.rework}</h2>
+          </div>
+          {failureError && <div className="page-alert">{failureError}</div>}
           {failureInfo?.summaryText && <pre className="pre">{failureInfo.summaryText}</pre>}
           {failureInfo?.reasons && failureInfo.reasons.length > 0 && (
             <VerificationReasons reasons={failureInfo.reasons} />
           )}
           {failureInfo?.reportText && <pre className="pre">{failureInfo.reportText}</pre>}
           <textarea
-            className="textarea"
+            className="page-textarea"
             placeholder={t.messages.reworkFeedbackPlaceholder}
             value={reworkFeedback}
             onChange={(e) => setReworkFeedback(e.target.value)}
             rows={3}
           />
-          <div className="row">
-            <button onClick={handleRework} disabled={actionLoading}>{t.buttons.reworkStep}</button>
+          <div className="panel-actions">
+            <button className="button-primary" onClick={handleRework} disabled={actionLoading}>{t.buttons.reworkStep}</button>
           </div>
         </div>
       )}
-      <div className="card">
-        <h2>{t.titles.events}</h2>
+      <div className="panel">
+        <div className="panel-header">
+          <h2 className="panel-title">{t.titles.events}</h2>
+        </div>
         <EventTimeline
           events={events}
           streamState={streamState}

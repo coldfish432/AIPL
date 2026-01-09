@@ -24,8 +24,6 @@ Constraints:
 - Do NOT use compound shell commands. Single command only: no ";" "&&" "||" "|" "$(" or backticks.
 - Policy intent (declarative; platform enforces allow/deny):
 {hard_block}
-- Soft profile (reference only):
-{soft_block}
 - Capabilities (discovered commands whitelist):
 {capabilities_block}
 

@@ -18,7 +18,6 @@ def main() -> None:
     parser.add_argument("--workspace", dest="workspace", help="workspace path")
     parser.add_argument("--max-rounds", dest="max_rounds", type=int, default=3, help="max retry rounds")
     parser.add_argument("--mode", dest="mode", default="autopilot", choices=["autopilot", "manual"], help="run mode")
-    parser.add_argument("--policy", dest="policy", default="guarded", help="execution policy")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()

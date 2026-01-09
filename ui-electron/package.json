@@ -13,6 +13,7 @@
   "dependencies": {
     "@dagrejs/dagre": "^1.0.0",
     "dagre": "^0.8.5",
+    "lucide-react": "^0.263.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tree-kill": "^1.2.2",

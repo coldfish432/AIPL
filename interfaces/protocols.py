@@ -31,24 +31,8 @@ class IProfileService(Protocol):
     def ensure_profile(self, root: Path, workspace: Path) -> JsonDict:
         ...
 
-    # proposesoft
-    def propose_soft(self, root: Path, workspace: Path, reason: str) -> JsonDict:
-        ...
-
-    # approvesoft
-    def approve_soft(self, root: Path, workspace: Path) -> JsonDict:
-        ...
-
-    # rejectsoft
-    def reject_soft(self, root: Path, workspace: Path) -> JsonDict:
-        ...
-
     # 加载档案
     def load_profile(self, root: Path, workspace: Path) -> JsonDict | None:
-        ...
-
-    # 判断是否需要proposeonfailure
-    def should_propose_on_failure(self, root: Path, workspace: Path, threshold: int = 2, limit: int = 20) -> bool:
         ...
 
 

@@ -35,20 +35,97 @@ public class PlanService {
         return res;
     }
 
-    public List<JsonNode> listPlans() throws Exception {
+    public List<JsonNode> listPlans(String workspace) throws Exception {
         List<JsonNode> items = planRepository.listPlansFromDb();
         List<JsonNode> filtered = new ArrayList<>();
+        String normalizedWorkspace = normalizeWorkspace(workspace);
         for (JsonNode item : items) {
             String planId = item.path("plan_id").asText(null);
             if (planId == null || planId.isBlank()) {
                 continue;
             }
-            Path planPath = paths.getEngineRoot().resolve("artifacts").resolve("executions").resolve(planId).resolve("plan.json");
-            if (Files.exists(planPath)) {
-                filtered.add(item);
+            Path execDir = paths.getEngineRoot().resolve("artifacts").resolve("executions").resolve(planId);
+            Path planPath = execDir.resolve("plan.json");
+            if (!Files.exists(planPath)) {
+                continue;
             }
+            if (normalizedWorkspace != null && !matchesWorkspace(planPath, execDir, normalizedWorkspace)) {
+                continue;
+            }
+            filtered.add(item);
         }
         return filtered;
+    }
+
+    private String normalizeWorkspace(String workspace) {
+        if (workspace == null || workspace.isBlank()) {
+            return null;
+        }
+        return workspace.replace("\\", "/").trim().toLowerCase();
+    }
+
+    private boolean matchesWorkspace(Path planPath, Path execDir, String normalizedWorkspace) {
+        String planWorkspace = readWorkspaceFromPlan(planPath);
+        if (planWorkspace != null && planWorkspace.startsWith(normalizedWorkspace)) {
+            return true;
+        }
+        Path runsDir = execDir.resolve("runs");
+        if (!Files.exists(runsDir)) {
+            return false;
+        }
+        try {
+            return Files.list(runsDir).anyMatch((runDir) -> matchesRunMeta(runDir, normalizedWorkspace));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String readWorkspaceFromPlan(Path planPath) {
+        try {
+            JsonNode plan = mapper.readTree(planPath.toFile());
+            String workspace = extractWorkspace(plan);
+            if (workspace != null) {
+                return workspace;
+            }
+            JsonNode planData = plan.get("plan");
+            if (planData != null) {
+                return extractWorkspace(planData);
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private String extractWorkspace(JsonNode node) {
+        if (node == null) {
+            return null;
+        }
+        JsonNode ws = node.get("workspace_path");
+        if (ws == null) {
+            ws = node.get("workspace");
+        }
+        if (ws != null && ws.isTextual()) {
+            return ws.asText().replace("\\", "/").trim().toLowerCase();
+        }
+        return null;
+    }
+
+    private boolean matchesRunMeta(Path runDir, String normalizedWorkspace) {
+        Path metaPath = runDir.resolve("meta.json");
+        if (!Files.exists(metaPath)) {
+            return false;
+        }
+        try {
+            JsonNode meta = mapper.readTree(metaPath.toFile());
+            String mainRoot = meta.path("workspace_main_root").asText(null);
+            String stageRoot = meta.path("workspace_stage_root").asText(null);
+            if (mainRoot != null && normalizeWorkspace(mainRoot).startsWith(normalizedWorkspace)) {
+                return true;
+            }
+            return stageRoot != null && normalizeWorkspace(stageRoot).startsWith(normalizedWorkspace);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     public JsonNode planDetail(String planId) throws Exception {

@@ -1,7 +1,7 @@
 import { API_BASE_URL } from "./config/settings";
 import { AiplError, ApiError } from "./lib/errors";
 
-const BASE_URL = API_BASE_URL;
+const BASE_URL = API_BASE_URL || "http://127.0.0.1:18088";
 
 type ApiEnvelope<T> = {
   ok?: boolean;
@@ -38,7 +38,6 @@ export type RunSummary = {
   input_task?: string;
   progress?: number;
   mode?: string;
-  policy?: string;
   changed_files_count?: number;
   patchset_path?: string;
 };
@@ -83,7 +82,6 @@ export type RunInfo = {
   updatedAt?: string | number;
   ts?: string | number;
   mode?: string;
-  policy?: string;
   patchset_path?: string;
   changed_files_count?: number;
   workspace_main_root?: string;
@@ -181,6 +179,8 @@ export type ChatMessage = {
 };
 
 export type ProfileData = Record<string, unknown>;
+export type PackRecord = Record<string, unknown>;
+export type MemoryRecord = Record<string, unknown>;
 
 export type CreatePlanResponse = {
   plan_id?: string;
@@ -197,8 +197,10 @@ export type CreateRunResponse = {
 };
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const hasBody = Boolean(options?.body);
+  const headers = hasBody ? { "Content-Type": "application/json" } : undefined;
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options
   });
   const body = (await res.json().catch(() => null)) as ApiEnvelope<T> | T | null;
@@ -219,6 +221,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return body as T;
 }
 
+function unwrapEngineEnvelope<T>(payload: T): T {
+  if (payload && typeof payload === "object" && "ok" in (payload as Record<string, unknown>) && "data" in (payload as Record<string, unknown>)) {
+    return (payload as Record<string, unknown>).data as T;
+  }
+  return payload;
+}
+
 function normalizeList<T>(data: unknown, keys: string[]): T[] {
   if (!data) return [];
   if (Array.isArray(data)) return data as T[];
@@ -231,13 +240,15 @@ function normalizeList<T>(data: unknown, keys: string[]): T[] {
   return [];
 }
 
-export async function listPlans(): Promise<PlanSummary[]> {
-  const data = await request<unknown>("/api/plans");
+export async function listPlans(workspace?: string): Promise<PlanSummary[]> {
+  const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
+  const data = await request<unknown>(`/api/plans${q}`);
   return normalizeList<PlanSummary>(data, ["items", "data", "plans"]);
 }
 
-export async function listRuns(): Promise<RunSummary[]> {
-  const data = await request<unknown>("/api/runs");
+export async function listRuns(workspace?: string): Promise<RunSummary[]> {
+  const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
+  const data = await request<unknown>(`/api/runs${q}`);
   return normalizeList<RunSummary>(data, ["items", "data", "runs"]);
 }
 
@@ -248,7 +259,7 @@ export async function createPlan(payload: { task: string; planId?: string; works
   });
 }
 
-export async function createRun(payload: { task: string; planId?: string; workspace?: string; mode?: string; policy?: string }): Promise<CreateRunResponse> {
+export async function createRun(payload: { task: string; planId?: string; workspace?: string; mode?: string }): Promise<CreateRunResponse> {
   return request<CreateRunResponse>(`/api/runs`, {
     method: "POST",
     body: JSON.stringify(payload)
@@ -354,48 +365,213 @@ export async function reworkRun(runId: string, payload: { stepId?: string; feedb
   });
 }
 
-export async function assistantChat(payload: { messages: ChatMessage[]; workspace?: string; policy?: string }): Promise<AssistantChatResponse> {
-  return request<AssistantChatResponse>("/api/assistant/chat", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-}
+  export async function assistantChat(payload: { messages: ChatMessage[]; workspace?: string; policy?: string }): Promise<AssistantChatResponse> {
+    return request<AssistantChatResponse>("/api/assistant/chat", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  }
 
-export async function assistantPlan(payload: { messages: ChatMessage[]; workspace?: string; planId?: string }): Promise<AssistantPlanResponse> {
-  return request<AssistantPlanResponse>("/api/assistant/plan", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-}
+  export async function assistantPlan(payload: { messages: ChatMessage[]; workspace?: string; planId?: string; policy?: string }): Promise<AssistantPlanResponse> {
+    return request<AssistantPlanResponse>("/api/assistant/plan", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  }
 
-export async function assistantConfirm(payload: { planId: string; workspace?: string; mode?: string; policy?: string }): Promise<AssistantConfirmResponse> {
-  return request<AssistantConfirmResponse>("/api/assistant/confirm", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-}
+  export async function assistantConfirm(payload: { planId: string; workspace?: string; mode?: string; policy?: string }): Promise<AssistantConfirmResponse> {
+    return request<AssistantConfirmResponse>("/api/assistant/confirm", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  }
 
 export async function getProfile(workspace: string): Promise<ProfileData> {
-  return request<ProfileData>(`/api/profile?workspace=${encodeURIComponent(workspace)}`);
+  const data = await request<ProfileData>(`/api/profile?workspace=${encodeURIComponent(workspace)}`);
+  return unwrapEngineEnvelope(data);
 }
 
-export async function proposeProfile(workspace: string): Promise<ProfileData> {
-  return request<ProfileData>(`/api/profile/propose`, {
+export async function updateProfile(workspace: string, userHard: Record<string, unknown> | null): Promise<ProfileData> {
+  const payload = JSON.stringify({ workspace, user_hard: userHard });
+  try {
+    const data = await request<ProfileData>(`/api/profile`, {
+      method: "PATCH",
+      body: payload
+    });
+    return unwrapEngineEnvelope(data);
+  } catch (err) {
+    const isMethodNotAllowed =
+      (err instanceof AiplError && err.details?.status === 405) ||
+      (err instanceof Error && err.message.toLowerCase().includes("not supported"));
+    if (!isMethodNotAllowed) {
+      throw err;
+    }
+  }
+  const fallback = await request<ProfileData>(`/api/profile`, {
     method: "POST",
-    body: JSON.stringify({ workspace })
+    body: payload
   });
+  return unwrapEngineEnvelope(fallback);
 }
 
-export async function approveProfile(workspace: string): Promise<ProfileData> {
-  return request<ProfileData>(`/api/profile/approve`, {
-    method: "POST",
-    body: JSON.stringify({ workspace })
-  });
+export async function listLanguagePacks(workspace?: string): Promise<PackRecord> {
+  const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
+  const data = await request<PackRecord>(`/api/language-packs${q}`);
+  return unwrapEngineEnvelope(data);
 }
 
-export async function rejectProfile(workspace: string): Promise<ProfileData> {
-  return request<ProfileData>(`/api/profile/reject`, {
+export async function getLanguagePack(packId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/language-packs/${encodeURIComponent(packId)}`);
+  return unwrapEngineEnvelope(data);
+}
+
+export async function importLanguagePack(pack: PackRecord): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/language-packs/import`, {
     method: "POST",
-    body: JSON.stringify({ workspace })
+    body: JSON.stringify({ pack })
   });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function exportLanguagePack(packId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/language-packs/${encodeURIComponent(packId)}/export`);
+  return unwrapEngineEnvelope(data);
+}
+
+export async function exportMergedLanguagePack(packId: string, payload: { name?: string; description?: string }): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/language-packs/${encodeURIComponent(packId)}/export-merged`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function exportLearnedLanguagePack(payload: { name?: string; description?: string }): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/language-packs/learned/export`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function updateLanguagePack(packId: string, enabled: boolean): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/language-packs/${encodeURIComponent(packId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled })
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function deleteLanguagePack(packId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/language-packs/${encodeURIComponent(packId)}`, { method: "DELETE" });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function clearLearnedLanguagePack(): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/language-packs/learned`, { method: "DELETE" });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function getWorkspaceMemory(workspaceId: string): Promise<MemoryRecord> {
+  const data = await request<MemoryRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/memory`);
+  return unwrapEngineEnvelope(data);
+}
+
+export async function listExperiencePacks(workspaceId: string): Promise<PackRecord[]> {
+  const data = await request<PackRecord[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/experience-packs`);
+  return unwrapEngineEnvelope(data);
+}
+
+export async function getExperiencePack(workspaceId: string, packId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/experience-packs/${encodeURIComponent(packId)}`);
+  return unwrapEngineEnvelope(data);
+}
+
+export async function importExperiencePack(workspaceId: string, pack: PackRecord): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/experience-packs/import`, {
+    method: "POST",
+    body: JSON.stringify({ pack })
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function importExperiencePackFromWorkspace(
+  workspaceId: string,
+  payload: { fromWorkspaceId: string; includeRules?: boolean; includeChecks?: boolean; includeLessons?: boolean; includePatterns?: boolean }
+): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/experience-packs/import-workspace`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function exportExperiencePack(
+  workspaceId: string,
+  payload: { name?: string; description?: string; includeRules?: boolean; includeChecks?: boolean; includeLessons?: boolean; includePatterns?: boolean }
+): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/experience-packs/export`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function updateExperiencePack(workspaceId: string, packId: string, enabled: boolean): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/experience-packs/${encodeURIComponent(packId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled })
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function deleteExperiencePack(workspaceId: string, packId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/experience-packs/${encodeURIComponent(packId)}`, {
+    method: "DELETE"
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function addWorkspaceRule(workspaceId: string, payload: { content: string; scope?: string; category?: string }): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/rules`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function deleteWorkspaceRule(workspaceId: string, ruleId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/rules/${encodeURIComponent(ruleId)}`, {
+    method: "DELETE"
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function addWorkspaceCheck(workspaceId: string, payload: { check: Record<string, unknown>; scope?: string }): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/checks`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function deleteWorkspaceCheck(workspaceId: string, checkId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/checks/${encodeURIComponent(checkId)}`, {
+    method: "DELETE"
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function deleteWorkspaceLesson(workspaceId: string, lessonId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/lessons/${encodeURIComponent(lessonId)}`, {
+    method: "DELETE"
+  });
+  return unwrapEngineEnvelope(data);
+}
+
+export async function clearWorkspaceLessons(workspaceId: string): Promise<PackRecord> {
+  const data = await request<PackRecord>(`/api/workspaces/${encodeURIComponent(workspaceId)}/lessons`, {
+    method: "DELETE"
+  });
+  return unwrapEngineEnvelope(data);
 }

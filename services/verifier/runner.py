@@ -24,45 +24,29 @@ class SubprocessRunner(CommandRunner):
         half = MAX_OUTPUT_BYTES // 2
         return text[:half] + "\n...[truncated]...\n" + text[-half:]
 
-    def _run_safe(self, cmd: str, cwd: Path, timeout: int) -> dict[str, Any]:
-        try:
-            cmd_parts = shlex.split(cmd)
-        except ValueError as exc:
-            return {"executed": False, "stderr": f"Invalid command: {exc}"}
-        try:
-            result = subprocess.run(
-                cmd_parts,
-                cwd=cwd,
-                shell=False,
-                timeout=timeout,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except subprocess.TimeoutExpired as exc:
-            return {
-                "executed": True,
-                "timed_out": True,
-                "returncode": None,
-                "stdout": coerce_text(getattr(exc, "stdout", "")),
-                "stderr": coerce_text(getattr(exc, "stderr", "")),
-                "timeout_error": coerce_text(exc),
-            }
+    def _build_timeout_response(self, exc: subprocess.TimeoutExpired) -> dict[str, Any]:
         return {
             "executed": True,
-            "timed_out": False,
-            "returncode": result.returncode,
-            "stdout": result.stdout or "",
-            "stderr": result.stderr or "",
+            "timed_out": True,
+            "returncode": None,
+            "stdout": coerce_text(getattr(exc, "stdout", "")),
+            "stderr": coerce_text(getattr(exc, "stderr", "")),
+            "timeout_error": coerce_text(exc),
         }
 
-    def _run_shell(self, cmd: str, cwd: Path, timeout: int) -> dict[str, Any]:
+    def _execute_command(self, cmd: str, cwd: Path, timeout: int, shell: bool) -> dict[str, Any]:
+        if shell:
+            run_args = cmd
+        else:
+            try:
+                run_args = shlex.split(cmd)
+            except ValueError as exc:
+                return {"executed": False, "stderr": f"Invalid command: {exc}"}
         try:
             result = subprocess.run(
-                cmd,
+                run_args,
                 cwd=cwd,
-                shell=True,
+                shell=shell,
                 timeout=timeout,
                 capture_output=True,
                 text=True,
@@ -70,14 +54,7 @@ class SubprocessRunner(CommandRunner):
                 errors="replace",
             )
         except subprocess.TimeoutExpired as exc:
-            return {
-                "executed": True,
-                "timed_out": True,
-                "returncode": None,
-                "stdout": coerce_text(getattr(exc, "stdout", "")),
-                "stderr": coerce_text(getattr(exc, "stderr", "")),
-                "timeout_error": coerce_text(exc),
-            }
+            return self._build_timeout_response(exc)
         return {
             "executed": True,
             "timed_out": False,
@@ -87,7 +64,7 @@ class SubprocessRunner(CommandRunner):
         }
 
     def run(self, cmd: str, cwd: Path, timeout: int) -> dict[str, Any]:
-        result = self._run_shell(cmd, cwd, timeout) if self.allow_shell else self._run_safe(cmd, cwd, timeout)
+        result = self._execute_command(cmd, cwd, timeout, self.allow_shell)
         stdout = coerce_text(result.get("stdout"))
         stderr = coerce_text(result.get("stderr"))
         result["stdout"] = self._truncate(stdout)

@@ -31,15 +31,16 @@ public class RunService {
         return paths.resolvePlanIdForRun(runId);
     }
 
-    public JsonNode run(String task, String planId, String workspace, String mode, String policy) throws Exception {
-        JsonNode res = engine.run(task, planId, workspace, mode, policy);
+    public JsonNode run(String task, String planId, String workspace, String mode) throws Exception {
+        JsonNode res = engine.run(task, planId, workspace, mode);
         runRepository.upsertRun(res);
         return res;
     }
 
-    public List<JsonNode> listRuns() throws Exception {
+    public List<JsonNode> listRuns(String workspace) throws Exception {
         List<JsonNode> items = runRepository.listRunsFromDb();
         List<JsonNode> filtered = new ArrayList<>();
+        String normalizedWorkspace = normalizeWorkspace(workspace);
         for (JsonNode item : items) {
             String runId = item.path("run_id").asText(null);
             String planId = item.path("plan_id").asText(null);
@@ -53,16 +54,45 @@ public class RunService {
                 continue;
             }
             Path runDir = paths.resolveRunDir(planId, runId);
-            if (runDir != null && Files.exists(runDir)) {
-                filtered.add(item);
+            if (runDir == null || !Files.exists(runDir)) {
+                continue;
             }
+            if (normalizedWorkspace != null && !matchesRunWorkspace(runDir, normalizedWorkspace)) {
+                continue;
+            }
+            filtered.add(item);
         }
         return filtered;
     }
 
+    private String normalizeWorkspace(String workspace) {
+        if (workspace == null || workspace.isBlank()) {
+            return null;
+        }
+        return workspace.replace("\\", "/").trim().toLowerCase();
+    }
 
-    public JsonNode runPlan(String planId, String workspace, String mode, String policy) throws Exception {
-        JsonNode res = engine.runPlan(planId, workspace, mode, policy);
+    private boolean matchesRunWorkspace(Path runDir, String normalizedWorkspace) {
+        Path metaPath = runDir.resolve("meta.json");
+        if (!Files.exists(metaPath)) {
+            return false;
+        }
+        try {
+            JsonNode meta = new com.fasterxml.jackson.databind.ObjectMapper().readTree(metaPath.toFile());
+            String mainRoot = meta.path("workspace_main_root").asText(null);
+            String stageRoot = meta.path("workspace_stage_root").asText(null);
+            if (mainRoot != null && normalizeWorkspace(mainRoot).startsWith(normalizedWorkspace)) {
+                return true;
+            }
+            return stageRoot != null && normalizeWorkspace(stageRoot).startsWith(normalizedWorkspace);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+
+    public JsonNode runPlan(String planId, String workspace, String mode) throws Exception {
+        JsonNode res = engine.runPlan(planId, workspace, mode);
         runRepository.upsertRun(res);
         return res;
     }

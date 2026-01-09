@@ -16,8 +16,7 @@ from config import (
     DEFAULT_MAX_CONCURRENCY,
     resolve_db_path,
 )
-from profile_store import ensure_profile_tables, read_profile, upsert_profile, log_review
-from soft_proposer import propose_soft_profile
+from profile_store import ensure_profile_tables, read_profile, upsert_profile
 
 _MEMORY_CONN: sqlite3.Connection | None = None
 _MEMORY_MODE = False
@@ -140,6 +139,20 @@ def load_user_hard_policy(workspace: Path) -> dict | None:
     return None
 
 
+def write_user_hard_policy(workspace: Path, user_hard: dict | None) -> tuple[dict | None, list[dict]]:
+    cleaned, reasons = sanitize_user_hard(user_hard)
+    json_path = workspace / "aipl.policy.json"
+    if cleaned is None:
+        if json_path.exists():
+            try:
+                json_path.unlink()
+            except Exception:
+                pass
+        return None, reasons
+    json_path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return cleaned, reasons
+
+
 # 构建systemhard策略
 def build_system_hard_policy(workspace: Path) -> dict:
     return {
@@ -242,9 +255,6 @@ def ensure_profile(root: Path, workspace: Path) -> dict:
             "fingerprint": fingerprint,
             "system_hard": system_hard,
             "user_hard": user_hard_clean,
-            "soft_draft": None,
-            "soft_approved": None,
-            "soft_version": 0,
             "hard_validation_reasons": hard_reasons,
             "effective_hard": effective_hard,
             "created": False,
@@ -266,8 +276,6 @@ def ensure_profile(root: Path, workspace: Path) -> dict:
                 "updated_at": int(time.time()),
             }
         )
-        if created:
-            profile.setdefault("soft_version", 0)
         upsert_profile(conn, profile)
     _close_conn(conn)
 
@@ -278,64 +286,6 @@ def ensure_profile(root: Path, workspace: Path) -> dict:
         "created": created,
         "fingerprint_changed": fingerprint_changed,
     }
-
-
-# proposesoft
-def propose_soft(root: Path, workspace: Path, reason: str) -> dict:
-    workspace = workspace.resolve()
-    profile = ensure_profile(root, workspace)
-    draft = propose_soft_profile(workspace, profile.get("fingerprint"))
-    conn = _open_profile_db(root)
-    if not conn:
-        return profile
-    with conn:
-        stored = read_profile(conn, profile["workspace_id"]) or profile
-        stored["soft_draft"] = draft
-        stored["updated_at"] = int(time.time())
-        upsert_profile(conn, stored)
-        log_review(conn, profile["workspace_id"], "propose", profile.get("fingerprint") or "", {"reason": reason, "draft": draft})
-    _close_conn(conn)
-    profile["soft_draft"] = draft
-    return profile
-
-
-# approvesoft
-def approve_soft(root: Path, workspace: Path) -> dict:
-    workspace = workspace.resolve()
-    profile = ensure_profile(root, workspace)
-    conn = _open_profile_db(root)
-    if not conn:
-        return profile
-    with conn:
-        stored = read_profile(conn, profile["workspace_id"]) or profile
-        draft = stored.get("soft_draft")
-        if draft is not None:
-            stored["soft_approved"] = draft
-            stored["soft_version"] = int(stored.get("soft_version") or 0) + 1
-            stored["updated_at"] = int(time.time())
-            upsert_profile(conn, stored)
-            log_review(conn, profile["workspace_id"], "approve", profile.get("fingerprint") or "", {"draft": draft, "soft_version": stored["soft_version"]})
-        profile = stored
-    _close_conn(conn)
-    return profile
-
-
-# rejectsoft
-def reject_soft(root: Path, workspace: Path) -> dict:
-    workspace = workspace.resolve()
-    profile = ensure_profile(root, workspace)
-    conn = _open_profile_db(root)
-    if not conn:
-        return profile
-    with conn:
-        stored = read_profile(conn, profile["workspace_id"]) or profile
-        stored["soft_draft"] = None
-        stored["updated_at"] = int(time.time())
-        upsert_profile(conn, stored)
-        log_review(conn, profile["workspace_id"], "reject", profile.get("fingerprint") or "", {"reason": "manual_reject"})
-        profile = stored
-    _close_conn(conn)
-    return profile
 
 
 # 加载档案
@@ -351,81 +301,18 @@ def load_profile(root: Path, workspace: Path) -> dict | None:
     return profile
 
 
-# 判断是否需要proposeonfailure，检查路径是否存在，解析JSON
-def should_propose_on_failure(root: Path, workspace: Path, threshold: int = 2, limit: int = 20) -> bool:
-    workspace = workspace.resolve()
-    reasons_count: dict[str, int] = {}
-    run_dirs: list[Path] = []
-    exec_root = root / "artifacts" / "executions"
-    if exec_root.exists():
-        for plan_dir in exec_root.iterdir():
-            runs_dir = plan_dir / "runs"
-            if runs_dir.exists():
-                for run_dir in runs_dir.iterdir():
-                    if run_dir.is_dir():
-                        run_dirs.append(run_dir)
-    run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-
-    checked = 0
-    for run_dir in run_dirs:
-        if checked >= limit:
-            break
-        meta_path = run_dir / "meta.json"
-        ver_path = run_dir / "steps" / "step-01"
-        if not meta_path.exists() or not ver_path.exists():
-            continue
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if Path(meta.get("workspace_path", "")).resolve() != workspace:
-            continue
-        latest_round = None
-        rounds = [p for p in ver_path.iterdir() if p.is_dir() and p.name.startswith("round-")]
-        if rounds:
-            rounds.sort(key=lambda p: p.name)
-            latest_round = rounds[-1] / "verification.json"
-        if not latest_round or not latest_round.exists():
-            continue
-        try:
-            ver = json.loads(latest_round.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if ver.get("passed") is True:
-            continue
-        for reason in ver.get("reasons", []) or []:
-            rtype = reason.get("type")
-            if not rtype:
-                continue
-            reasons_count[rtype] = reasons_count.get(rtype, 0) + 1
-        checked += 1
-    return any(count >= threshold for count in reasons_count.values())
-
-
 class ProfileService:
     # 确保档案
     def ensure_profile(self, root: Path, workspace: Path) -> dict:
         return ensure_profile(root, workspace)
 
-    # proposesoft
-    def propose_soft(self, root: Path, workspace: Path, reason: str) -> dict:
-        return propose_soft(root, workspace, reason)
-
-    # approvesoft
-    def approve_soft(self, root: Path, workspace: Path) -> dict:
-        return approve_soft(root, workspace)
-
-    # rejectsoft
-    def reject_soft(self, root: Path, workspace: Path) -> dict:
-        return reject_soft(root, workspace)
-
     # 加载档案
     def load_profile(self, root: Path, workspace: Path) -> dict | None:
         return load_profile(root, workspace)
 
-    # 判断是否需要proposeonfailure
-    def should_propose_on_failure(self, root: Path, workspace: Path, threshold: int = 2, limit: int = 20) -> bool:
-        return should_propose_on_failure(root, workspace, threshold=threshold, limit=limit)
+    def update_user_hard(self, root: Path, workspace: Path, user_hard: dict | None) -> dict:
+        write_user_hard_policy(workspace, user_hard)
+        return ensure_profile(root, workspace)
 
 
 __all__ = [
@@ -435,10 +322,7 @@ __all__ = [
     "DEFAULT_MAX_CONCURRENCY",
     "compute_fingerprint",
     "ensure_profile",
-    "propose_soft",
-    "approve_soft",
-    "reject_soft",
     "load_profile",
-    "should_propose_on_failure",
     "ProfileService",
+    "write_user_hard_policy",
 ]

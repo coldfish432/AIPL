@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from config.settings import get_settings
-from detect_workspace import detect_workspace
+from engine.project_context import ProjectContext
 from interfaces.protocols import IProfileService
 
 __all__ = ["load_policy", "merge_checks", "is_high_risk", "has_execution_check"]
@@ -19,15 +19,14 @@ def load_policy(
 
     workspace = Path(workspace_path)
     profile = profile_service.ensure_profile(root, workspace)
-    if profile.get("created"):
-        profile = profile_service.propose_soft(root, workspace, reason="new_workspace")
-    elif profile.get("fingerprint_changed"):
-        profile = profile_service.propose_soft(root, workspace, reason="fingerprint_changed")
 
     effective_hard = profile.get("effective_hard") or {}
-    workspace_info = detect_workspace(workspace)
-    checks = workspace_info.get("checks", [])
-    capabilities = workspace_info.get("capabilities", {})
+    context = ProjectContext(root, workspace)
+    checks = context.get_default_checks()
+    capabilities = context.workspace_info.get("capabilities", {}) if isinstance(context.workspace_info, dict) else {}
+    if context.workspace_id:
+        capabilities = dict(capabilities)
+        capabilities["workspace_id"] = context.workspace_id
     settings = get_settings()
 
     policy = {

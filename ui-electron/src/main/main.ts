@@ -1,4 +1,5 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { ServerManager } from "./server";
@@ -11,6 +12,12 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800
+    ,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -21,6 +28,27 @@ async function createWindow() {
     await mainWindow.loadURL(pathToFileURL(indexPath).toString());
   }
 }
+
+ipcMain.handle("aipl-pick-workspace", async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
+  if (result.canceled || !result.filePaths.length) {
+    return null;
+  }
+  return result.filePaths[0];
+});
+
+ipcMain.handle("aipl-save-json", async (_event, payload: { suggestedName?: string; data?: string }) => {
+  if (!mainWindow) return null;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: payload.suggestedName || "export.json",
+    filters: [{ name: "JSON", extensions: ["json"] }]
+  });
+  if (result.canceled || !result.filePath) return null;
+  const content = payload.data ?? "";
+  fs.writeFileSync(result.filePath, content, "utf-8");
+  return result.filePath;
+});
 
 app.whenReady().then(async () => {
   const ok = await serverManager.start();

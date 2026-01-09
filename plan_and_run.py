@@ -18,9 +18,10 @@ from services.profile_service import DEFAULT_ALLOWED_COMMANDS, compute_fingerpri
 from config import DEFAULT_DENY_COMMANDS, DEFAULT_DENY_WRITE, resolve_db_path
 from policy_validator import validate_checks, default_path_rules, is_safe_relative_path
 from detect_workspace import detect_workspace
+from engine.project_context import ProjectContext
 from services.code_graph_service import CodeGraphService
 from services.profile_service import ProfileService
-from infra.path_guard import is_workspace_unsafe
+from infra.path_guard import is_workspace_unsafe, normalize_path
 
 
 def _normalize_cmd_path(path: str | Path) -> str:
@@ -347,7 +348,6 @@ def main():
     parser.add_argument("--stale-auto-reset", action="store_true", default=DEFAULT_STALE_AUTO_RESET, help="auto reset stale tasks to todo")
     parser.add_argument("--no-stale-auto-reset", action="store_true", help="disable auto reset even if env enables it")
     parser.add_argument("--mode", default="autopilot", choices=["autopilot", "manual"], help="run mode")
-    parser.add_argument("--policy", default="guarded", help="execution policy")
     args = parser.parse_args()
     root = Path(args.root).resolve()
     backlog_dir = root / "backlog"
@@ -365,30 +365,38 @@ def main():
 
     profile = None
     hard_block = "none"
-    soft_block = "none"
     allowed_commands = list(DEFAULT_ALLOWED_COMMANDS)
     capabilities_block = "none"
     command_blacklist = list(DEFAULT_DENY_COMMANDS or [])
     workspace_checks: list[dict] = []
     workspace_path = None
+    workspace_value = None
     if args.workspace:
         workspace_path = _auto_select_workspace(Path(args.workspace))
         if is_workspace_unsafe(root, workspace_path):
             print(f"[POLICY] workspace path {workspace_path} includes engine root {root}; refusing to proceed.")
             return
-        workspace_info = detect_workspace(workspace_path)
-        workspace_checks = workspace_info.get("checks", []) if isinstance(workspace_info, dict) else []
+        workspace_value = normalize_path(workspace_path)
+        context = ProjectContext(root, workspace_path)
+        workspace_info = context.workspace_info
+        workspace_checks = context.get_default_checks()
         capabilities = (workspace_info or {}).get("capabilities", {}) if isinstance(workspace_info, dict) else {}
+        if context.workspace_id or workspace_value:
+            capabilities = dict(capabilities)
+        if context.workspace_id:
+            capabilities["workspace_id"] = context.workspace_id
+        if workspace_value:
+            capabilities["workspace"] = workspace_value
+        try:
+            capabilities["language_packs"] = context.list_language_packs().get("active", [])
+        except Exception:
+            pass
         discovered = [c.get("cmd") for c in capabilities.get("commands", []) if isinstance(c, dict) and c.get("cmd")]
         if discovered:
             command_blacklist = list(DEFAULT_DENY_COMMANDS or [])
         if capabilities:
             capabilities_block = json.dumps(capabilities, ensure_ascii=False, indent=2)
         profile = profile_service.ensure_profile(root, workspace_path)
-        if profile.get("created"):
-            profile = profile_service.propose_soft(root, workspace_path, reason="new_workspace")
-        elif profile.get("fingerprint_changed"):
-            profile = profile_service.propose_soft(root, workspace_path, reason="fingerprint_changed")
         effective_hard = profile.get("effective_hard") or {}
         allowed_commands = effective_hard.get("allowed_commands", allowed_commands) or allowed_commands
         hard_block = json.dumps(
@@ -403,9 +411,6 @@ def main():
             ensure_ascii=False,
             indent=2,
         )
-        soft_approved = profile.get("soft_approved")
-        if soft_approved:
-            soft_block = json.dumps(soft_approved, ensure_ascii=False, indent=2)
         print(f"[PROFILE] workspace_id={profile.get('workspace_id')} fingerprint={profile.get('fingerprint')}")
 
     tmpl = (root / "prompts" / "plan.txt").read_text(encoding="utf-8")
@@ -414,7 +419,6 @@ def main():
         max_tasks=args.max_tasks,
         task_text=user_task,
         hard_block=hard_block,
-        soft_block=soft_block,
         capabilities_block=capabilities_block,
     )
 
@@ -428,7 +432,8 @@ def main():
     exec_dir.mkdir(parents=True, exist_ok=True)
     if capabilities_block != "none":
         try:
-            write_json(exec_dir / "capabilities.json", {"workspace": str(workspace_path) if workspace_path else args.workspace, "capabilities": json.loads(capabilities_block)})
+            workspace_field = workspace_value or (str(workspace_path) if workspace_path else args.workspace)
+            write_json(exec_dir / "capabilities.json", {"workspace": workspace_field, "capabilities": json.loads(capabilities_block)})
         except Exception:
             pass
     workspace_fingerprint = None
@@ -468,6 +473,9 @@ def main():
             if reasons:
                 rec["validation_reasons"] = reasons
                 validation_summary.append({"task_id": rec.get("id"), "reasons": reasons})
+            workspace_entry = workspace_value if workspace_value is not None else rec.get("workspace_path")
+            if workspace_entry is not None:
+                rec["workspace_path"] = workspace_entry
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
@@ -488,27 +496,29 @@ def main():
         checks = _normalize_checks(checks)
         checks = _merge_checks(checks, workspace_checks)
         checks, reasons = validate_checks(checks, allowed_commands, command_blacklist=command_blacklist)
-        plan_tasks.append(
-            {
-                "id": task_id,
-                "step_id": step_id,
-                "title": t.get("title", f"Task {idx}"),
-                "description": t.get("description", ""),
-                "capabilities": t.get("capabilities", []),
-                "artifacts": t.get("artifacts", []),
-                "type": "time_for_certainty",
-                "priority": t.get("priority", 50),
-                "estimated_minutes": t.get("estimated_minutes", 30),
-                "status": "todo",
-                "dependencies": t.get("dependencies", []),
-                "acceptance_criteria": t.get("acceptance_criteria", []),
-                "checks": checks,
-                "validation_reasons": reasons,
-                "plan_id": plan_id,
-                "created_ts": time.time(),
-                "status_ts": time.time(),
-            }
-        )
+        workspace_entry = workspace_value if workspace_value is not None else t.get("workspace_path")
+        record: dict[str, object | None] = {
+            "id": task_id,
+            "step_id": step_id,
+            "title": t.get("title", f"Task {idx}"),
+            "description": t.get("description", ""),
+            "capabilities": t.get("capabilities", []),
+            "artifacts": t.get("artifacts", []),
+            "type": "time_for_certainty",
+            "priority": t.get("priority", 50),
+            "estimated_minutes": t.get("estimated_minutes", 30),
+            "status": "todo",
+            "dependencies": t.get("dependencies", []),
+            "acceptance_criteria": t.get("acceptance_criteria", []),
+            "checks": checks,
+            "validation_reasons": reasons,
+            "plan_id": plan_id,
+            "created_ts": time.time(),
+            "status_ts": time.time(),
+        }
+        if workspace_entry is not None:
+            record["workspace_path"] = workspace_entry
+        plan_tasks.append(record)
 
     write_json(plan_backlog_path, {"tasks": plan_tasks})
     write_json(
@@ -522,6 +532,8 @@ def main():
             "validation": validation_summary,
             "code_graph_path": code_graph_path,
             "workspace_fingerprint": workspace_fingerprint,
+            "workspace_path": workspace_value,
+            "workspace_main_root": workspace_value,
             "created_ts": time.time(),
         },
     )
@@ -547,7 +559,7 @@ def main():
             stop_reason = "no_runnable"
             break
         print(f"[RUN] invoking controller for plan_id={plan_id}")
-        cmd = ["python", "-m", "services.controller_service", "--root", str(root), "--plan-id", plan_id, "--mode", args.mode, "--policy", args.policy]
+        cmd = ["python", "-m", "services.controller_service", "--root", str(root), "--plan-id", plan_id, "--mode", args.mode]
         if workspace_path:
             cmd.extend(["--workspace", str(workspace_path)])
         subprocess.check_call(cmd, cwd=root)

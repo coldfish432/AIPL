@@ -9,6 +9,13 @@ def _normalize_path(path: Path) -> str:
     return raw.lower() if os.name == "nt" else raw
 
 
+def normalize_path(value: Path | str | None) -> str | None:
+    if value is None:
+        return None
+    path_obj = value if isinstance(value, Path) else Path(value)
+    return _normalize_path(path_obj)
+
+
 def is_path_under(base: Path, candidate: Path) -> bool:
     base_norm = _normalize_path(base)
     cand_norm = _normalize_path(candidate)

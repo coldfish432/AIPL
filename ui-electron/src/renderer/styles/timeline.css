@@ -1,0 +1,244 @@
+/* EventTimeline 鏍峰紡 - [xxx] 鍓嶇紑鏍煎紡 */
+
+.timeline {
+  max-height: 400px;
+  overflow: auto;
+  background: #11100f;
+  color: #e9dccf;
+  border-radius: 12px;
+  padding: 12px;
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.timeline::-webkit-scrollbar {
+  width: 6px;
+}
+
+.timeline::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.timeline::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.timeline-banner {
+  background: #2d261f;
+  border: 1px solid #44362b;
+  padding: 6px 10px;
+  border-radius: 10px;
+  color: #f5c27a;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.timeline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+  line-height: 1.5;
+}
+
+.timeline-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* 閿欒绾у埆鏍峰紡 */
+.timeline-item.level-error {
+  background: rgba(246, 120, 120, 0.08);
+}
+
+.timeline-item.level-error .timeline-label {
+  color: #f67878;
+}
+
+.timeline-item.level-error .timeline-summary {
+  color: #f7c6c6;
+}
+
+/* 璀﹀憡绾у埆鏍峰紡 */
+.timeline-item.level-warning {
+  background: rgba(245, 194, 122, 0.08);
+}
+
+.timeline-item.level-warning .timeline-label {
+  color: #f5c27a;
+}
+
+/* 鏃堕棿鎴?*/
+.timeline-time {
+  flex-shrink: 0;
+  width: 140px;
+  color: #6b5b4a;
+  font-size: 11px;
+}
+
+/* [xxx] 鏍囩 */
+.timeline-label {
+  flex-shrink: 0;
+  min-width: 60px;
+  color: #f5c27a;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+/* 涓嶅悓绫诲瀷鐨勬爣绛鹃鑹?*/
+.timeline-item[data-type="init"] .timeline-label,
+.timeline-item[data-type="start"] .timeline-label {
+  color: #a8c7fa;
+}
+
+.timeline-item[data-type="done"] .timeline-label,
+.timeline-item[data-type="success"] .timeline-label {
+  color: #81c995;
+}
+
+.timeline-item[data-type="fail"] .timeline-label,
+.timeline-item[data-type="error"] .timeline-label {
+  color: #f67878;
+}
+
+.timeline-item[data-type="thinking"] .timeline-label,
+.timeline-item[data-type="analyzing"] .timeline-label {
+  color: #c4a6ff;
+}
+
+/* 鎽樿鏂囨湰 */
+.timeline-summary {
+  flex: 1;
+  color: #d4c4b5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* 杩斿伐鎸夐挳 */
+.link-button {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid #5b2a1a;
+  color: #f7c6c6;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.link-button:hover:not(:disabled) {
+  background: rgba(246, 120, 120, 0.15);
+  border-color: #f67878;
+}
+
+.link-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.file-link {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.file-link:hover {
+  color: #c46a39;
+}
+
+.file-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 绌虹姸鎬?*/
+.timeline .muted {
+  color: #6b5b4a;
+  text-align: center;
+  padding: 20px;
+}
+
+/* ========== 鍝嶅簲寮?========== */
+@media (max-width: 768px) {
+  .timeline {
+    font-size: 11px;
+  }
+  
+  .timeline-time {
+    width: 100px;
+    font-size: 10px;
+  }
+  
+  .timeline-label {
+    min-width: 50px;
+    font-size: 11px;
+  }
+}
+
+/* ========== 绱у噾妯″紡 ========== */
+.timeline.compact .timeline-item {
+  padding: 4px 6px;
+  gap: 6px;
+}
+
+.timeline.compact .timeline-time {
+  width: 70px;
+}
+
+/* ========== 鍒嗙粍鏍囬锛堝彲閫夛級 ========== */
+.timeline-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  margin-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: #8b7b6a;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.timeline-group:first-child {
+  margin-top: 0;
+  border-top: none;
+}
+
+/* ========== 杩涘害鎸囩ず鍣紙鍙€夛級 ========== */
+.timeline-item.running .timeline-label::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #f5c27a;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ========== 娣辫壊涓婚寰皟 ========== */
+.timeline-item:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.timeline-item:nth-child(odd):hover {
+  background: rgba(255, 255, 255, 0.04);
+}

@@ -21,13 +21,12 @@ public class EngineClient {
         this.engineRoot = Path.of(engineRoot).toAbsolutePath().normalize();
     }
 
-    public JsonNode run(String task, String planId, String workspace, String mode, String policy) throws Exception {
+    public JsonNode run(String task, String planId, String workspace, String mode) throws Exception {
         List<String> cmd = new EngineCommandBuilder("run", engineRoot.toString())
                 .arg("--task", task)
                 .arg("--plan-id", planId)
                 .arg("--workspace", workspace)
                 .arg("--mode", mode)
-                .arg("--policy", policy)
                 .build();
         return exec(cmd);
     }
@@ -42,12 +41,11 @@ public class EngineClient {
     }
 
 
-    public JsonNode runPlan(String planId, String workspace, String mode, String policy) throws Exception {
+    public JsonNode runPlan(String planId, String workspace, String mode) throws Exception {
         List<String> cmd = new EngineCommandBuilder("run-plan", engineRoot.toString())
                 .arg("--plan-id", planId)
                 .arg("--workspace", workspace)
                 .arg("--mode", mode)
-                .arg("--policy", policy)
                 .build();
         return exec(cmd);
     }
@@ -134,6 +132,19 @@ public class EngineClient {
         return exec(cmd);
     }
 
+    public JsonNode profileUpdate(String workspace, JsonNode userHard) throws Exception {
+        Path payloadPath = writePayload(
+                "profile",
+                mapper.createObjectNode().set("user_hard", userHard == null ? mapper.nullNode() : userHard)
+        );
+        List<String> cmd = new EngineCommandBuilder("profile", engineRoot.toString())
+                .arg("--action", "update")
+                .arg("--workspace", workspace)
+                .arg("--payload", payloadPath.toString())
+                .build();
+        return exec(cmd);
+    }
+
     public JsonNode assistantChat(JsonNode payload) throws Exception {
         Path dir = engineRoot.resolve("artifacts").resolve("assistant");
         Files.createDirectories(dir);
@@ -141,6 +152,110 @@ public class EngineClient {
         mapper.writeValue(payloadPath.toFile(), payload);
         List<String> cmd = new EngineCommandBuilder("assistant-chat", engineRoot.toString())
                 .arg("--messages-file", payloadPath.toString())
+                .build();
+        return exec(cmd);
+    }
+
+    private Path writePayload(String prefix, JsonNode payload) throws Exception {
+        Path dir = engineRoot.resolve("artifacts").resolve("assistant");
+        Files.createDirectories(dir);
+        Path payloadPath = dir.resolve(prefix + "-" + System.currentTimeMillis() + ".json");
+        mapper.writeValue(payloadPath.toFile(), payload);
+        return payloadPath;
+    }
+
+    public JsonNode languagePacks(
+            String action,
+            String packId,
+            JsonNode payload,
+            String name,
+            String description,
+            Boolean enabled,
+            String workspace
+    ) throws Exception {
+        Path payloadPath = payload != null ? writePayload("language-pack", payload) : null;
+        String enabledValue = enabled != null ? (enabled ? "1" : "0") : null;
+        List<String> cmd = new EngineCommandBuilder("language-packs", engineRoot.toString())
+                .arg("--action", action)
+                .arg("--pack-id", packId)
+                .arg("--payload", payloadPath != null ? payloadPath.toString() : null)
+                .arg("--name", name)
+                .arg("--description", description)
+                .arg("--enabled", enabledValue)
+                .arg("--workspace", workspace)
+                .build();
+        return exec(cmd);
+    }
+
+    public JsonNode memory(String workspaceId) throws Exception {
+        List<String> cmd = new EngineCommandBuilder("memory", engineRoot.toString())
+                .arg("--workspace-id", workspaceId)
+                .build();
+        return exec(cmd);
+    }
+
+    public JsonNode experiencePacks(
+            String action,
+            String workspaceId,
+            String packId,
+            JsonNode payload,
+            String fromWorkspaceId,
+            Boolean includeRules,
+            Boolean includeChecks,
+            Boolean includeLessons,
+            Boolean includePatterns,
+            String name,
+            String description,
+            Boolean enabled
+    ) throws Exception {
+        Path payloadPath = payload != null ? writePayload("experience-pack", payload) : null;
+        String enabledValue = enabled != null ? (enabled ? "1" : "0") : null;
+        List<String> cmd = new EngineCommandBuilder("experience-packs", engineRoot.toString())
+                .arg("--action", action)
+                .arg("--workspace-id", workspaceId)
+                .arg("--pack-id", packId)
+                .arg("--payload", payloadPath != null ? payloadPath.toString() : null)
+                .arg("--from-workspace-id", fromWorkspaceId)
+                .flag("--include-rules", includeRules != null && includeRules)
+                .flag("--include-checks", includeChecks != null && includeChecks)
+                .flag("--include-lessons", includeLessons != null && includeLessons)
+                .flag("--include-patterns", includePatterns != null && includePatterns)
+                .arg("--name", name)
+                .arg("--description", description)
+                .arg("--enabled", enabledValue)
+                .build();
+        return exec(cmd);
+    }
+
+    public JsonNode rules(String action, String workspaceId, String ruleId, String content, String scope, String category) throws Exception {
+        List<String> cmd = new EngineCommandBuilder("rules", engineRoot.toString())
+                .arg("--action", action)
+                .arg("--workspace-id", workspaceId)
+                .arg("--rule-id", ruleId)
+                .arg("--content", content)
+                .arg("--scope", scope)
+                .arg("--category", category)
+                .build();
+        return exec(cmd);
+    }
+
+    public JsonNode checks(String action, String workspaceId, String checkId, JsonNode payload, String scope) throws Exception {
+        Path payloadPath = payload != null ? writePayload("checks", payload) : null;
+        List<String> cmd = new EngineCommandBuilder("checks", engineRoot.toString())
+                .arg("--action", action)
+                .arg("--workspace-id", workspaceId)
+                .arg("--check-id", checkId)
+                .arg("--payload", payloadPath != null ? payloadPath.toString() : null)
+                .arg("--scope", scope)
+                .build();
+        return exec(cmd);
+    }
+
+    public JsonNode lessons(String action, String workspaceId, String lessonId) throws Exception {
+        List<String> cmd = new EngineCommandBuilder("lessons", engineRoot.toString())
+                .arg("--action", action)
+                .arg("--workspace-id", workspaceId)
+                .arg("--lesson-id", lessonId)
                 .build();
         return exec(cmd);
     }

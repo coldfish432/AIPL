@@ -8,7 +8,6 @@ type Props = {
   unifiedStatus: UnifiedStatus;
   statusText: string;
   workflowStage: string;
-  policy: string;
   task: string;
   updated: string;
 };
@@ -19,46 +18,41 @@ export default function RunInfoCard({
   unifiedStatus,
   statusText,
   workflowStage,
-  policy,
   task,
   updated
 }: Props) {
   const { t } = useI18n();
 
   return (
-    <div className="card">
-      <h2>{t.titles.runInfo}</h2>
-      <div className="list">
-        <div className="list-item">
-          <div className="title">{t.labels.runId}</div>
-          <div className="meta">{runId}</div>
+    <div className="panel">
+      <div className="panel-header">
+        <h2 className="panel-title">{t.titles.runInfo}</h2>
+        <div className={`status-pill ${getStatusClassName(unifiedStatus)}`}>{statusText}</div>
+      </div>
+      <div className="info-grid">
+        <div className="info-item">
+          <div className="info-label">{t.labels.runId}</div>
+          <div className="info-value">{runId}</div>
         </div>
-        <div className="list-item">
-          <div className="title">{t.labels.planId}</div>
-          <div className="meta">{planId}</div>
+        <div className="info-item">
+          <div className="info-label">{t.labels.planId}</div>
+          <div className="info-value">{planId}</div>
         </div>
-        <div className="list-item">
-          <div>
-            <div className="title">{t.labels.status}</div>
-            <div className="meta">{statusText}</div>
-          </div>
-          <div className={`pill ${getStatusClassName(unifiedStatus)}`}>{statusText}</div>
+        <div className="info-item">
+          <div className="info-label">{t.labels.status}</div>
+          <div className="info-value">{statusText}</div>
         </div>
-        <div className="list-item">
-          <div className="title">{t.labels.currentStage}</div>
-          <div className="meta">{workflowStage}</div>
+        <div className="info-item">
+          <div className="info-label">{t.labels.currentStage}</div>
+          <div className="info-value">{workflowStage}</div>
         </div>
-        <div className="list-item">
-          <div className="title">{t.labels.policy}</div>
-          <div className="meta">{policy}</div>
+        <div className="info-item">
+          <div className="info-label">{t.labels.task}</div>
+          <div className="info-value">{task}</div>
         </div>
-        <div className="list-item">
-          <div className="title">{t.labels.task}</div>
-          <div className="meta">{task}</div>
-        </div>
-        <div className="list-item">
-          <div className="title">{t.labels.updated}</div>
-          <div className="meta">{updated}</div>
+        <div className="info-item">
+          <div className="info-label">{t.labels.updated}</div>
+          <div className="info-value">{updated}</div>
         </div>
       </div>
     </div>

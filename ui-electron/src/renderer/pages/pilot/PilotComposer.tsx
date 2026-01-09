@@ -30,28 +30,28 @@ export default function PilotComposer({
 
   return (
     <>
-      <div className="row">
+      <div className="assistant-composer">
         <textarea
-          className="textarea"
+          className="assistant-textarea"
           placeholder={placeholder || t.messages.taskInputPlaceholder}
           value={input}
           onChange={(e) => onInputChange(e.target.value)}
           disabled={disabled || loading}
           rows={3}
         />
-      </div>
-      <div className="row">
-        <button onClick={onSend} disabled={!canSend}>
+        <div className="assistant-footer">
+          <button className="button-primary" onClick={onSend} disabled={!canSend}>
           {loading ? t.messages.sendLoading : t.buttons.send}
         </button>
         {loading && (
-          <button className="danger" onClick={onTerminate}>
+            <button className="button-danger" onClick={onTerminate}>
             {loadingKind === "plan" ? t.buttons.terminatePlan : t.buttons.terminateChat}
           </button>
         )}
-        {error && <span className="error">{error}</span>}
-        {loadingKind === "plan" && <span className="muted">{t.messages.planLoading}</span>}
-        {loadingKind === "chat" && <span className="muted">{t.messages.chatLoading}</span>}
+          {error && <span className="page-inline-error">{error}</span>}
+          {loadingKind === "plan" && <span className="page-inline-note">{t.messages.planLoading}</span>}
+          {loadingKind === "chat" && <span className="page-inline-note">{t.messages.chatLoading}</span>}
+        </div>
       </div>
     </>
   );

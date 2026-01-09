@@ -36,7 +36,7 @@ public class RunController {
 
     @PostMapping("/runs")
     public ApiResponse<JsonNode> run(@RequestBody RunRequest req) throws Exception {
-        JsonNode res = runService.run(req.task, req.planId, req.workspace, req.mode, req.policy);
+        JsonNode res = runService.run(req.task, req.planId, req.workspace, req.mode);
         JsonNode data = res.has("data") ? res.get("data") : res;
         return ApiResponse.ok(data);
     }
@@ -44,15 +44,14 @@ public class RunController {
     @PostMapping("/assistant/confirm")
     public ApiResponse<JsonNode> assistantConfirm(@RequestBody AssistantConfirmRequest req) throws Exception {
         String mode = (req.mode == null || req.mode.isBlank()) ? "autopilot" : req.mode;
-        String policy = (req.policy == null || req.policy.isBlank()) ? "guarded" : req.policy;
-        JsonNode res = runService.runPlan(req.planId, req.workspace, mode, policy);
+        JsonNode res = runService.runPlan(req.planId, req.workspace, mode);
         JsonNode data = res.has("data") ? res.get("data") : res;
         return ApiResponse.ok(data);
     }
 
     @GetMapping("/runs")
-    public ApiResponse<List<JsonNode>> listRuns() throws Exception {
-        return ApiResponse.ok(runService.listRuns());
+    public ApiResponse<List<JsonNode>> listRuns(@RequestParam(required = false) String workspace) throws Exception {
+        return ApiResponse.ok(runService.listRuns(workspace));
     }
 
     @GetMapping("/runs/{runId}")

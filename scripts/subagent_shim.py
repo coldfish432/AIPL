@@ -478,8 +478,6 @@ def main():
         ensure_ascii=False,
         indent=2,
     )
-    soft_approved = profile.get("soft_approved")
-    soft_block = json.dumps(soft_approved, ensure_ascii=False, indent=2) if soft_approved else "none"
     prompt = tmpl.format(
         task_id=task_id,
         run_name=run_dir.name,
@@ -491,7 +489,6 @@ def main():
         related_files_block=related_files_block,
         workspace=str(workspace_path),
         hard_block=hard_block,
-        soft_block=soft_block,
     )
 
     raw = run_codex(prompt, root, run_dir, round_dir).strip()

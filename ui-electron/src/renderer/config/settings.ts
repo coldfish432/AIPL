@@ -10,13 +10,14 @@ export interface AppConfig {
   };
   storage: {
     workspaceKey: string;
-    policyKey: string;
     sessionKey: string;
     sessionActiveKey: string;
     queueKey: string;
     queuePausedKey: string;
     baseWorkspaceKey: string;
+    policyKey: string;
     runOrderKey: string;
+    workspaceHistoryKey: string;
   };
 }
 
@@ -30,17 +31,18 @@ const defaultConfig: AppConfig = {
     maxEventsDisplay: 500,
     dateLocale: "zh-CN"
   },
-  storage: {
-    workspaceKey: "aipl.workspace",
-    policyKey: "aipl.policy",
-    sessionKey: "aipl.pilot.sessions",
-    sessionActiveKey: "aipl.pilot.active",
-    queueKey: "aipl.pilot.queue",
-    queuePausedKey: "aipl.pilot.queuePaused",
-    baseWorkspaceKey: "aipl.pilot.baseWorkspace",
-    runOrderKey: "aipl.dashboard.runOrder"
-  }
-};
+    storage: {
+      workspaceKey: "aipl.workspace",
+      sessionKey: "aipl.pilot.sessions",
+      sessionActiveKey: "aipl.pilot.active",
+      queueKey: "aipl.pilot.queue",
+      queuePausedKey: "aipl.pilot.queuePaused",
+      baseWorkspaceKey: "aipl.pilot.baseWorkspace",
+      policyKey: "aipl.pilot.policy",
+      runOrderKey: "aipl.dashboard.runOrder",
+      workspaceHistoryKey: "aipl.workspace.history"
+    }
+  };
 
 function loadConfig(): AppConfig {
   return {

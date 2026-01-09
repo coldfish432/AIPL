@@ -88,7 +88,7 @@ class TaskController:
             tasks_with_path = [(t, path) for path, tasks in backlog_map.items() for t in tasks]
             backlog = {"tasks": [t for t, _ in tasks_with_path]}
 
-        task, backlog_path = pick_next_task(tasks_with_path, plan_filter=args.plan_id)
+        task, backlog_path = pick_next_task(tasks_with_path, plan_filter=args.plan_id, workspace=workspace_path)
         if not task:
             from curriculum import suggest_next_task
 
@@ -103,7 +103,7 @@ class TaskController:
                 write_json(backlog_path, backlog)
                 print(f"[CURRICULUM] appended {new_task['id']} -> retry pick")
                 task, backlog_path = pick_next_task(
-                    [(t, backlog_path) for t in backlog.get("tasks", [])], plan_filter=args.plan_id
+                    [(t, backlog_path) for t in backlog.get("tasks", [])], plan_filter=args.plan_id, workspace=workspace_path
                 )
 
             if not task:
@@ -160,7 +160,6 @@ class TaskController:
                 "workspace_id": policy.get("workspace_id"),
                 "fingerprint": policy.get("fingerprint"),
                 "mode": args.mode,
-                "policy": args.policy,
                 "status": "running",
                 "disable_tests": disable_tests,
             },
@@ -402,7 +401,6 @@ class TaskController:
             "plan_id": plan_id_for_run,
             "status": final_status,
             "mode": meta_snapshot.get("mode"),
-            "policy": meta_snapshot.get("policy"),
             "patchset_path": meta_snapshot.get("patchset_path"),
             "changed_files_count": meta_snapshot.get("changed_files_count"),
             "workspace_main_root": meta_snapshot.get("workspace_main_root"),
@@ -411,5 +409,3 @@ class TaskController:
         mirror_run_to_sqlite(root, payload)
 
         print(f"[DONE] run={run_dir} status={final_status}")
-        if not passed_all and workspace_path and self._profile_service.should_propose_on_failure(root, Path(workspace_path), threshold=2):
-            self._profile_service.propose_soft(root, Path(workspace_path), reason="repeated_failures")

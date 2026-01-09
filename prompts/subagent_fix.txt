@@ -6,8 +6,6 @@ Context:
 - Workspace: {workspace}
 - Policy intent (declarative; platform enforces allow/deny):
 {hard_block}
-- Soft profile (reference only):
-{soft_block}
 
 Acceptance criteria:
 {acceptance_block}

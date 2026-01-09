@@ -8,12 +8,13 @@ import PilotComposer from "./pilot/PilotComposer";
 import PilotHeader from "./pilot/PilotHeader";
 import { useQueue, QueueItem, QueueStatus } from "../hooks/useQueue";
 import { usePlanLock } from "../hooks/usePlanLock";
-import { useSession, ChatMessage, appendStoredMessage, getStoredSession, setStoredPending, updateStoredSession } from "../hooks/useSession";
+import { useSession, ChatMessage as SessionChatMessage, ChatSession, appendStoredMessage, getStoredSession, setStoredPending, updateStoredSession } from "../hooks/useSession";
 import { useVisibilityPolling } from "../hooks/useVisibilityPolling";
 import { resolveStatus, isFinished } from "../lib/status";
 import { useI18n } from "../lib/useI18n";
 import { STORAGE_KEYS } from "../config/settings";
 import { useNavigate } from "react-router-dom";
+import type { ChatMessage as ApiChatMessage } from "../apiClient";
 
 const BASE_WORKSPACE_KEY = STORAGE_KEYS.baseWorkspaceKey;
 
@@ -46,6 +47,13 @@ function normalizeWorkspaceCandidate(value?: string): string | undefined {
     return undefined;
   }
   return trimmed;
+}
+
+function toApiMessage(message: SessionChatMessage): ApiChatMessage {
+  return {
+    role: message.role,
+    content: message.content
+  };
 }
 
 export default function Pilot() {
@@ -316,7 +324,7 @@ export default function Pilot() {
     void pollQueue();
   }, 5000, true);
 
-  async function createPlanFromConversation(messageList: ChatMessage[]): Promise<{ planId: string | null; planText: string } | null> {
+  async function createPlanFromConversation(messageList: SessionChatMessage[]): Promise<{ planId: string | null; planText: string } | null> {
     if (!activeSession) {
       setError(t.messages.needCreateChat);
       return null;
@@ -335,9 +343,9 @@ export default function Pilot() {
     setStoredPending(sessionId, { kind: "plan", startedAt: Date.now(), requestId });
     setError(null);
     try {
-      const payloadMessages = [
+      const payloadMessages: ApiChatMessage[] = [
         { role: "system", content: t.prompts.systemLanguage },
-        ...messageList.map((msg) => ({ role: msg.role, content: msg.content }))
+        ...messageList.map(toApiMessage)
       ];
       const res = await assistantPlan({ messages: payloadMessages, workspace: workspaceRef.current.trim() || undefined });
       const nextPlanId = res.plan_id || res.planId || null;
@@ -395,15 +403,16 @@ export default function Pilot() {
     const sessionId = activeSession.id;
     const requestId = makeRequestId();
     setInput("");
-    appendStoredMessage(sessionId, { role: "user", content: message, kind: "text" });
+    const userMessage: SessionChatMessage = { role: "user", content: message, kind: "text" };
+    appendStoredMessage(sessionId, userMessage);
     setStoredPending(sessionId, { kind: "chat", startedAt: Date.now(), requestId });
     setError(null);
     try {
-      const payloadMessages = activeSession.messages.concat({ role: "user", content: message });
+      const payloadMessages = activeSession.messages.concat(userMessage);
       const res = await assistantChat({
         messages: [
           { role: "system", content: t.prompts.systemLanguage },
-          ...payloadMessages.map((msg) => ({ role: msg.role, content: msg.content }))
+          ...payloadMessages.map(toApiMessage)
         ],
         workspace: workspaceRef.current.trim() || undefined,
         policy: policyRef.current
@@ -540,6 +549,21 @@ export default function Pilot() {
     setStoredPending(sessionId, null);
   };
 
+  const handleEnqueuePlan = useCallback(
+    (planId: string | null | undefined, planText: string, session: ChatSession | null) => {
+      if (!planId) return;
+      enqueuePlan(planId, planText, session);
+    },
+    [enqueuePlan]
+  );
+
+  const handleStartRun = useCallback(
+    (planId: string, planText: string) => {
+      enqueuePlan(planId, planText, activeSession);
+    },
+    [enqueuePlan, activeSession]
+  );
+
   return (
     <section className="stack">
       <div className="card">
@@ -574,7 +598,8 @@ export default function Pilot() {
               session={activeSession}
               loading={loading}
               confirmLoading={confirmLoading}
-              onEnqueuePlan={(planId, planText) => enqueuePlan(planId, planText, activeSession)}
+              onStartRun={handleStartRun}
+              onEnqueuePlan={handleEnqueuePlan}
               onStartFlow={handleStartFlow}
               onConfirmPlan={confirmPlan}
               onCancelPlan={cancelPlan}

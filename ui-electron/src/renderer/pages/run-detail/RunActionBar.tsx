@@ -36,31 +36,37 @@ export default function RunActionBar({
   const streamLabel = t.status[streamState as keyof typeof t.status] || streamState;
 
   return (
-    <div className="row">
-      <button onClick={onBack}>{t.buttons.back}</button>
-      <button onClick={onDeleteRun} disabled={actionLoading}>{t.buttons.deleteRun}</button>
-      {isRunning && (
-        <button onClick={onCancel} disabled={actionLoading} className="danger">
-          {t.buttons.cancelRun}
-        </button>
-      )}
-      {canRetry && (
-        <div className="dropdown">
-          <button onClick={onToggleRetryMenu} disabled={actionLoading}>
-            {t.buttons.retry} ?
-          </button>
-          {retryMenuOpen && (
-            <div className="dropdown-menu">
-              <button onClick={() => onRetry()}>{t.buttons.retry}</button>
-              <button onClick={() => onRetry({ retryDeps: true })}>{t.buttons.retryWithDeps}</button>
-              <button onClick={() => onRetry({ force: true })}>{t.buttons.retryForce}</button>
+    <>
+      <div className="run-action-bar">
+        <div className="run-action-buttons">
+          <button className="button-secondary" onClick={onBack}>{t.buttons.back}</button>
+          <button className="button-danger" onClick={onDeleteRun} disabled={actionLoading}>{t.buttons.deleteRun}</button>
+          {isRunning && (
+            <button className="button-danger" onClick={onCancel} disabled={actionLoading}>
+              {t.buttons.cancelRun}
+            </button>
+          )}
+          {canRetry && (
+            <div className="dropdown">
+              <button className="button-secondary" onClick={onToggleRetryMenu} disabled={actionLoading}>
+                {t.buttons.retry}
+              </button>
+              {retryMenuOpen && (
+                <div className="dropdown-menu">
+                  <button onClick={() => onRetry()}>{t.buttons.retry}</button>
+                  <button onClick={() => onRetry({ retryDeps: true })}>{t.buttons.retryWithDeps}</button>
+                  <button onClick={() => onRetry({ force: true })}>{t.buttons.retryForce}</button>
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
-      <span className={`pill ${streamState}`}>{t.labels.stream} {streamLabel}</span>
-      {error && <span className="error">{error}</span>}
-      {inlineNotice && <span className="muted">{inlineNotice}</span>}
-    </div>
+        <div className="run-action-status">
+          <span className={`status-pill ${streamState}`}>{t.labels.stream} {streamLabel}</span>
+          {error && <span className="page-inline-error">{error}</span>}
+        </div>
+      </div>
+      {inlineNotice && <div className="page-inline-note">{inlineNotice}</div>}
+    </>
   );
 }

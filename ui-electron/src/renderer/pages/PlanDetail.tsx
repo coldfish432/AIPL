@@ -62,30 +62,37 @@ export default function PlanDetail({ planId, onBack }: Props) {
   const tasks = useMemo(() => (snapshotTasks.length > 0 ? snapshotTasks : rawTasks), [snapshotTasks, rawTasks]);
 
   return (
-    <section className="stack">
-      <div className="row">
-        <button onClick={onBack}>{t.buttons.back}</button>
-        <button onClick={load} disabled={loading}>{loading ? t.messages.loading : t.buttons.refresh}</button>
-        <button onClick={handleDeletePlan} disabled={loading}>{t.buttons.deletePlan}</button>
-        {error && <span className="error">{error}</span>}
+    <section className="page">
+      <div className="page-header">
+      <div>
+        <p className="page-subtitle">{t.labels.planId}: {planId}</p>
       </div>
-      <div className="grid">
-        <div className="card">
-          <h2>{t.titles.planInfo}</h2>
-          <div className="list">
-            <div className="list-item">
-              <div className="title">{t.labels.planId}</div>
-              <div className="meta">{planId}</div>
+        <div className="page-actions">
+          <button className="button-secondary" onClick={onBack}>{t.buttons.back}</button>
+          <button className="button-secondary" onClick={load} disabled={loading}>{loading ? t.messages.loading : t.buttons.refresh}</button>
+          <button className="button-danger" onClick={handleDeletePlan} disabled={loading}>{t.buttons.deletePlan}</button>
+        </div>
+      </div>
+      {error && <div className="page-alert">{error}</div>}
+      <div className="panel-grid">
+        <div className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">{t.titles.planInfo}</h2>
+          </div>
+          <div className="info-grid">
+            <div className="info-item">
+              <div className="info-label">{t.labels.planId}</div>
+              <div className="info-value">{planId}</div>
             </div>
-            <div className="list-item">
-              <div className="title">{t.labels.inputTask}</div>
-              <div className="meta">{planInfo?.input_task || planInfo?.inputTask || "-"}</div>
+            <div className="info-item">
+              <div className="info-label">{t.labels.inputTask}</div>
+              <div className="info-value">{planInfo?.input_task || planInfo?.inputTask || "-"}</div>
             </div>
           </div>
         </div>
-        <div className="card">
-          <div className="row">
-            <h2>{t.titles.taskChain}</h2>
+        <div className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">{t.titles.taskChain}</h2>
             <div className="mode-toggle">
               <button className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>
                 {t.labels.listView}
@@ -96,25 +103,25 @@ export default function PlanDetail({ planId, onBack }: Props) {
             </div>
           </div>
           {viewMode === "list" ? (
-            <div className="list">
-              {tasks.length === 0 && <div className="muted">{t.messages.taskChainEmptyData}</div>}
+            <div className="card-list">
+              {tasks.length === 0 && <div className="page-muted">{t.messages.taskChainEmptyData}</div>}
               {tasks.map((task: PlanTask, idx: number) => {
                 const taskId = task.step_id || task.id || task.task_id || `task-${idx + 1}`;
                 const title = task.title || task.name || `${t.labels.task} ${idx + 1}`;
                 const status = String(task.status || "pending").toLowerCase();
                 const statusLabel = t.status[status as keyof typeof t.status] || status;
                 return (
-                  <div key={taskId} className="list-item task-item">
-                    <div>
-                      <div className="title">{title}</div>
-                      <div className="meta">{t.labels.taskId} {taskId}</div>
-                      {task.description && <div className="meta">{task.description}</div>}
-                      <div className="meta">{t.labels.dependencies} {formatDeps(task.dependencies)}</div>
+                  <div key={taskId} className="card-item">
+                    <div className="card-item-main">
+                      <div className="card-item-title">{title}</div>
+                      <div className="card-item-meta">{t.labels.taskId} {taskId}</div>
+                      {task.description && <div className="card-item-meta">{task.description}</div>}
+                      <div className="card-item-meta">{t.labels.dependencies} {formatDeps(task.dependencies)}</div>
                       {task.capabilities && task.capabilities.length > 0 && (
-                        <div className="meta">{t.labels.capabilities} {task.capabilities.join(", ")}</div>
+                        <div className="card-item-meta">{t.labels.capabilities} {task.capabilities.join(", ")}</div>
                       )}
                     </div>
-                    <div className={`pill ${status}`}>{statusLabel}</div>
+                    <div className={`status-pill ${status}`}>{statusLabel}</div>
                   </div>
                 );
               })}
@@ -124,8 +131,10 @@ export default function PlanDetail({ planId, onBack }: Props) {
           )}
         </div>
       </div>
-      <div className="card">
-        <h2>{t.titles.planText}</h2>
+      <div className="panel">
+        <div className="panel-header">
+          <h2 className="panel-title">{t.titles.planText}</h2>
+        </div>
         <pre className="pre">{planText || t.messages.planEmpty}</pre>
       </div>
     </section>

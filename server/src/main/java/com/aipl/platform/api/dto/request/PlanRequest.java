@@ -5,5 +5,4 @@ public class PlanRequest {
     public String planId;
     public String workspace;
     public String mode;
-    public String policy;
 }

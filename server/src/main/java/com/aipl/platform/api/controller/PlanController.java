@@ -45,8 +45,8 @@ public class PlanController {
     }
 
     @GetMapping("/plans")
-    public ApiResponse<List<JsonNode>> listPlans() throws Exception {
-        return ApiResponse.ok(planService.listPlans());
+    public ApiResponse<List<JsonNode>> listPlans(@RequestParam(required = false) String workspace) throws Exception {
+        return ApiResponse.ok(planService.listPlans(workspace));
     }
 
     @GetMapping("/plans/{planId}")

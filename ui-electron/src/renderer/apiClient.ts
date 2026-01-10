@@ -180,6 +180,17 @@ export type ChatMessage = {
 
 export type ProfileData = Record<string, unknown>;
 export type PackRecord = Record<string, unknown>;
+export type WorkspaceInfo = {
+  project_type?: string;
+  allow_write?: string[];
+  deny_write?: string[];
+  checks?: Array<{ type?: string; cmd?: string; timeout?: number }>;
+  capabilities?: {
+    project_type?: string;
+    detected?: string[];
+    commands?: Array<{ cmd?: string; kind?: string; timeout?: number }>;
+  };
+};
 export type MemoryRecord = Record<string, unknown>;
 
 export type CreatePlanResponse = {
@@ -195,6 +206,14 @@ export type CreateRunResponse = {
   planId?: string;
   [key: string]: unknown;
 };
+
+export async function getWorkspaceInfo(workspace: string): Promise<WorkspaceInfo> {
+  if (!workspace) {
+    throw new AiplError("workspace is required");
+  }
+  const params = new URLSearchParams({ workspace });
+  return request<WorkspaceInfo>(`/api/workspace/info?${params.toString()}`);
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const hasBody = Boolean(options?.body);
@@ -365,26 +384,26 @@ export async function reworkRun(runId: string, payload: { stepId?: string; feedb
   });
 }
 
-  export async function assistantChat(payload: { messages: ChatMessage[]; workspace?: string; policy?: string }): Promise<AssistantChatResponse> {
-    return request<AssistantChatResponse>("/api/assistant/chat", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-  }
+export async function assistantChat(payload: { messages: ChatMessage[]; workspace?: string }): Promise<AssistantChatResponse> {
+  return request<AssistantChatResponse>("/api/assistant/chat", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
 
-  export async function assistantPlan(payload: { messages: ChatMessage[]; workspace?: string; planId?: string; policy?: string }): Promise<AssistantPlanResponse> {
-    return request<AssistantPlanResponse>("/api/assistant/plan", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-  }
+export async function assistantPlan(payload: { messages: ChatMessage[]; workspace?: string; planId?: string }): Promise<AssistantPlanResponse> {
+  return request<AssistantPlanResponse>("/api/assistant/plan", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
 
-  export async function assistantConfirm(payload: { planId: string; workspace?: string; mode?: string; policy?: string }): Promise<AssistantConfirmResponse> {
-    return request<AssistantConfirmResponse>("/api/assistant/confirm", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-  }
+export async function assistantConfirm(payload: { planId: string; workspace?: string; mode?: string }): Promise<AssistantConfirmResponse> {
+  return request<AssistantConfirmResponse>("/api/assistant/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
 
 export async function getProfile(workspace: string): Promise<ProfileData> {
   const data = await request<ProfileData>(`/api/profile?workspace=${encodeURIComponent(workspace)}`);

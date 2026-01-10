@@ -121,6 +121,25 @@ public class RunService {
         return res;
     }
 
+    public JsonNode pause(String planId, String runId) throws Exception {
+        String resolvedPlanId = resolvePlanId(planId, runId);
+        JsonNode res = engine.pause(resolvedPlanId, runId);
+        runRepository.upsertRun(res);
+        return res;
+    }
+
+    public JsonNode resume(String planId, String runId) throws Exception {
+        String resolvedPlanId = resolvePlanId(planId, runId);
+        JsonNode res = engine.resume(resolvedPlanId, runId);
+        runRepository.upsertRun(res);
+        return res;
+    }
+
+    public JsonNode cancelPlanRuns(String planId) throws Exception {
+        JsonNode res = engine.cancelPlanRuns(planId);
+        return res;
+    }
+
     public JsonNode apply(String planId, String runId) throws Exception {
         String resolvedPlanId = resolvePlanId(planId, runId);
         JsonNode res = engine.apply(resolvedPlanId, runId);

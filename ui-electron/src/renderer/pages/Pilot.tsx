@@ -2,11 +2,9 @@
 import { assistantChat, assistantConfirm, assistantPlan, discardRun, getPlan, getRun, listRuns } from "../apiClient";
 import ChatSidebar from "../components/ChatSidebar";
 import ChatPanel from "../components/ChatPanel";
-import QueuePanel from "../components/QueuePanel";
 import { PlanLockStatus } from "../components/PlanLockStatus";
 import PilotComposer from "./pilot/PilotComposer";
 import PilotHeader from "./pilot/PilotHeader";
-import { useQueue, QueueItem, QueueStatus } from "../hooks/useQueue";
 import { usePlanLock } from "../hooks/usePlanLock";
 import { useSession, ChatMessage as SessionChatMessage, ChatSession, appendStoredMessage, getStoredSession, setStoredPending, updateStoredSession } from "../hooks/useSession";
 import { useVisibilityPolling } from "../hooks/useVisibilityPolling";
@@ -66,7 +64,8 @@ export default function Pilot() {
     addPendingReview,
     removePendingReview,
     completeWithoutReview,
-    forceUnlock
+    forceUnlock,
+    setActiveRunId
   } = usePlanLock();
   const {
     sessions,
@@ -77,30 +76,22 @@ export default function Pilot() {
     deleteSession,
     renameSession
   } = useSession();
-  const { queue, paused, setPaused, updateItem, updateQueue, cancelAll, clearQueue } = useQueue();
 
   const [workspace, setWorkspace] = useState(() => localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
-  const [policy, setPolicy] = useState(() => localStorage.getItem(STORAGE_KEYS.policyKey) || "guarded");
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [confirmLoading, setConfirmLoading] = useState(false);
   const [baseWorkspace, setBaseWorkspace] = useState(() => localStorage.getItem(BASE_WORKSPACE_KEY) || "");
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
 
-  const queueRef = useRef(queue);
   const workspaceRef = useRef(workspace);
-  const policyRef = useRef(policy);
-  const pausedRef = useRef(paused);
   const baseWorkspaceRef = useRef(baseWorkspace);
+  const currentRunIdRef = useRef(currentRunId);
 
   const pending = activeSession?.pending ?? null;
   const loading = Boolean(pending);
   const loadingKind = pending?.kind ?? null;
   const canSend = input.trim().length > 0 && !loading;
   const isLocked = lock.status !== "idle";
-
-  useEffect(() => {
-    queueRef.current = queue;
-  }, [queue]);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -114,13 +105,8 @@ export default function Pilot() {
   }, [workspace]);
 
   useEffect(() => {
-    policyRef.current = policy;
-    localStorage.setItem(STORAGE_KEYS.policyKey, policy);
-  }, [policy]);
-
-  useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
+    currentRunIdRef.current = currentRunId;
+  }, [currentRunId]);
 
   useEffect(() => {
     baseWorkspaceRef.current = baseWorkspace;
@@ -135,42 +121,6 @@ export default function Pilot() {
     return () => window.removeEventListener("aipl-workspace-changed", syncWorkspace);
   }, []);
 
-  const enqueuePlan = useCallback(
-    (planId: string, planText: string, session?: typeof activeSession | null) => {
-      const allowed = canStartNewPlan();
-      if (!allowed.allowed) {
-        setError(allowed.reason || t.messages.planLocked);
-        return;
-      }
-      updateQueue((prev) => {
-        const exists = prev.some((item) => item.planId === planId && !["failed", "canceled"].includes(item.status));
-        if (exists) return prev;
-        const base =
-          normalizeWorkspaceCandidate(baseWorkspaceRef.current) ||
-          normalizeWorkspaceCandidate(workspaceRef.current.trim());
-        if (!baseWorkspaceRef.current && base) {
-          setBaseWorkspace(base);
-        }
-        const item: QueueItem = {
-          id: `queue-${Date.now()}`,
-          planId,
-          planText,
-          status: "queued",
-          queuedAt: Date.now(),
-          baseWorkspace: base || undefined,
-          chatId: session?.id,
-          chatTitle: session?.title
-        };
-        const nextQueue = prev.concat(item);
-        setTimeout(() => {
-          void startNextQueued(nextQueue);
-        }, 0);
-        return nextQueue;
-      });
-    },
-    [canStartNewPlan, t.messages.planLocked, updateQueue]
-  );
-
   const resolveRunIdFromList = useCallback(async (planId: string | undefined) => {
     if (!planId) return undefined;
     try {
@@ -182,146 +132,95 @@ export default function Pilot() {
     }
   }, []);
 
-  const startNextQueued = useCallback(async (queueOverride?: QueueItem[]) => {
-    if (pausedRef.current) return;
-    const currentQueue = queueOverride || queueRef.current;
-    if (currentQueue.some((item) => ["running", "starting", "retrying"].includes(item.status))) {
+  const startPlanExecution = useCallback(async (planId: string) => {
+    setError(null);
+    const allowed = canStartNewPlan();
+    if (!allowed.allowed) {
+      setError(allowed.reason || t.messages.planLocked);
       return;
     }
-    const next = currentQueue.find((item) => item.status === "queued");
-    if (!next) return;
-    lockForPlan(next.planId);
-    updateItem(next.id, (item) => ({ ...item, status: "starting", startedAt: Date.now() }));
+    lockForPlan(planId);
+    const candidate =
+      normalizeWorkspaceCandidate(baseWorkspaceRef.current) ||
+      normalizeWorkspaceCandidate(workspaceRef.current.trim());
+    if (candidate) {
+      setBaseWorkspace(candidate);
+    }
     try {
-      const workspaceBase =
-        normalizeWorkspaceCandidate(next.baseWorkspace) ||
-        normalizeWorkspaceCandidate(baseWorkspaceRef.current) ||
-        normalizeWorkspaceCandidate(workspaceRef.current.trim()) ||
-        undefined;
+      const workspaceBase = candidate || undefined;
       const res = await assistantConfirm({
-        planId: next.planId,
+        planId,
         workspace: workspaceBase,
-        mode: "autopilot",
-        policy: policyRef.current
+        mode: "autopilot"
       });
       let runId = res.run_id || res.runId;
       if (!runId) {
-        runId = await resolveRunIdFromList(next.planId);
-      }
-      if (workspaceBase) {
-        setBaseWorkspace(workspaceBase);
+        runId = await resolveRunIdFromList(planId);
       }
       if (!runId) {
-        setError(t.messages.startRunFailedNoId);
-        updateItem(next.id, (item) => ({ ...item, status: "failed", finishedAt: Date.now() }));
+        // eslint-disable-next-line no-throw-literal
+        throw new Error(t.messages.startRunFailedNoId);
+      }
+      setCurrentRunId(runId);
+      setActiveRunId(runId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t.messages.planFailed;
+      setError(message || t.messages.planFailed);
+      forceUnlock();
+      setCurrentRunId(null);
+    }
+  }, [
+    canStartNewPlan,
+    forceUnlock,
+    lockForPlan,
+    resolveRunIdFromList,
+    setActiveRunId,
+    t.messages.planFailed,
+    t.messages.planLocked,
+    t.messages.startRunFailedNoId
+  ]);
+
+  const pollCurrentRun = useCallback(async () => {
+    const runId = currentRunIdRef.current;
+    if (!runId) return;
+    const planId = lock.activePlanId || undefined;
+    try {
+      const res = await getRun(runId, planId);
+      const errResponse = res as { ok?: boolean; error?: string };
+      if (errResponse.ok === false || (errResponse.error || "").toLowerCase().includes("not found")) {
+        setError(t.messages.planLocked);
         forceUnlock();
+        setCurrentRunId(null);
         return;
       }
-        updateItem(next.id, (item) => ({ ...item, status: "running", runId, reviewStatus: null }));
-      try {
-        const runRes = await getRun(runId, next.planId);
-        const unified = resolveStatus(runRes.run?.status || runRes.status || runRes.state || "running");
-        updateItem(next.id, (item) => ({
-          ...item,
-          status: unified.execution as QueueStatus,
-          reviewStatus: unified.review,
-          finishedAt: isFinished(unified.execution) ? Date.now() : item.finishedAt
-        }));
-        if (isFinished(unified.execution)) {
-          if (unified.review === "pending" && runId) {
-            addPendingReview(runId);
-          } else {
-            completeWithoutReview();
-          }
+      let snapshotTasks: Array<{ status?: string }> = [];
+      if (planId) {
+        try {
+          snapshotTasks = (await getPlan(planId))?.snapshot?.tasks || [];
+        } catch {
+          snapshotTasks = [];
         }
-      } catch {
-        // ignore immediate refresh errors
+      }
+      const unified = resolveStatus(res.run?.status || res.status || res.state || "running", snapshotTasks);
+      const mainRoot = res.run?.workspace_main_root || res.workspace_main_root;
+      if (mainRoot) {
+        setBaseWorkspace(mainRoot);
+      }
+      if (isFinished(unified.execution)) {
+        if (unified.review === "pending") {
+          addPendingReview(runId);
+        } else {
+          completeWithoutReview();
+        }
+        setCurrentRunId(null);
       }
     } catch {
-      const fallbackRunId = await resolveRunIdFromList(next.planId);
-      if (fallbackRunId) {
-        updateItem(next.id, (item) => ({ ...item, status: "running", runId: fallbackRunId, reviewStatus: null }));
-        return;
-      }
-      updateItem(next.id, (item) => ({ ...item, status: "failed", reviewStatus: null, finishedAt: Date.now() }));
-      forceUnlock();
+      // swallow transient failures
     }
-  }, [addPendingReview, completeWithoutReview, forceUnlock, lockForPlan, resolveRunIdFromList, updateItem]);
-
-  const pollQueue = useCallback(async () => {
-    const currentQueue = queueRef.current;
-    const activeItems = currentQueue.filter((item) => ["running", "starting", "retrying", "failed", "canceled", "discarded"].includes(item.status));
-    let runsCache: Array<{ run_id?: string; runId?: string; plan_id?: string; planId?: string }> | null = null;
-    const resolveRunId = async (planId: string) => {
-      if (!runsCache) {
-        runsCache = await listRuns().catch(() => []);
-      }
-      const match = runsCache.find((run) => (run.plan_id || run.planId) === planId);
-      return match ? (match.run_id || match.runId) : undefined;
-    };
-
-    for (const item of activeItems) {
-      let runId = item.runId;
-      let latestRunId: string | undefined;
-      if (item.planId) {
-        latestRunId = await resolveRunId(item.planId);
-      }
-      if (latestRunId && latestRunId != runId) {
-        runId = latestRunId;
-        updateItem(item.id, (q) => ({ ...q, runId, status: "retrying", reviewStatus: null, finishedAt: undefined }));
-        continue;
-      }
-      if (!runId) continue;
-      try {
-        const res = await getRun(runId, item.planId);
-        const resAny = res as { ok?: boolean; error?: string };
-        if (resAny.ok === false || (resAny.error || "").toLowerCase().includes("not found")) {
-          updateItem(item.id, (q) => ({ ...q, status: "failed", finishedAt: Date.now() }));
-          continue;
-        }
-        let snapshotTasks: Array<{ status?: string }> = [];
-        if (item.planId) {
-          try {
-            snapshotTasks = (await getPlan(item.planId))?.snapshot?.tasks || [];
-          } catch {
-            snapshotTasks = [];
-          }
-        }
-        const unified = resolveStatus(res.run?.status || res.status || res.state || "running", snapshotTasks);
-        const mainRoot = res.run?.workspace_main_root || res.workspace_main_root;
-        if (mainRoot) {
-          setBaseWorkspace(mainRoot);
-        }
-        updateItem(item.id, (q) => ({
-          ...q,
-          runId,
-          status: unified.execution as QueueStatus,
-          reviewStatus: unified.review,
-          finishedAt: isFinished(unified.execution) ? Date.now() : q.finishedAt
-        }));
-        if (isFinished(unified.execution) && item.planId === lock.activePlanId) {
-          if (unified.review === "pending" && runId) {
-            addPendingReview(runId);
-          } else {
-            completeWithoutReview();
-          }
-        }
-      } catch {
-        updateItem(item.id, (q) => ({ ...q, status: "failed", reviewStatus: null, finishedAt: Date.now() }));
-      }
-    }
-
-    if (!pausedRef.current) {
-      const stillRunning = currentQueue.some((item) => ["running", "starting", "retrying"].includes(item.status));
-      const hasQueued = currentQueue.some((item) => item.status === "queued");
-      if (!stillRunning && hasQueued) {
-        void startNextQueued();
-      }
-    }
-  }, [addPendingReview, completeWithoutReview, lock.activePlanId, startNextQueued, updateItem]);
+  }, [addPendingReview, completeWithoutReview, forceUnlock, lock.activePlanId, resolveStatus, t.messages.planLocked]);
 
   useVisibilityPolling(() => {
-    void pollQueue();
+    void pollCurrentRun();
   }, 5000, true);
 
   async function createPlanFromConversation(messageList: SessionChatMessage[]): Promise<{ planId: string | null; planText: string } | null> {
@@ -414,8 +313,7 @@ export default function Pilot() {
           { role: "system", content: t.prompts.systemLanguage },
           ...payloadMessages.map(toApiMessage)
         ],
-        workspace: workspaceRef.current.trim() || undefined,
-        policy: policyRef.current
+        workspace: workspaceRef.current.trim() || undefined
       });
       const current = getStoredSession(sessionId);
       if (!current?.pending || current.pending.requestId !== requestId) {
@@ -542,6 +440,7 @@ export default function Pilot() {
       }
     }
     forceUnlock();
+    setCurrentRunId(null);
   }, [forceUnlock, lock.activePlanId, lock.pendingReviewRuns, removePendingReview]);
 
   const handleTerminatePending = (sessionId?: string | null) => {
@@ -549,19 +448,11 @@ export default function Pilot() {
     setStoredPending(sessionId, null);
   };
 
-  const handleEnqueuePlan = useCallback(
-    (planId: string | null | undefined, planText: string, session: ChatSession | null) => {
-      if (!planId) return;
-      enqueuePlan(planId, planText, session);
-    },
-    [enqueuePlan]
-  );
-
   const handleStartRun = useCallback(
     (planId: string, planText: string) => {
-      enqueuePlan(planId, planText, activeSession);
+      void startPlanExecution(planId);
     },
-    [enqueuePlan, activeSession]
+    [startPlanExecution]
   );
 
   return (
@@ -571,12 +462,9 @@ export default function Pilot() {
         <PlanLockStatus lock={lock} onGoToReview={handleGoToReview} onForceUnlock={handleForceUnlock} />
         <PilotHeader
           workspace={workspace}
-          policy={policy}
-          onPolicyChange={setPolicy}
           onStartFlow={handleStartFlow}
           onNewChat={createNewSession}
           loading={loading}
-          confirmLoading={confirmLoading}
           locked={isLocked}
         />
 
@@ -594,26 +482,22 @@ export default function Pilot() {
           />
 
           <div className="pilot-main">
+            {workspace && (
+              <div className="pilot-workspace-hint">
+                <span>{t.messages.workspaceIntro}</span>
+                <strong>{workspace}</strong>
+              </div>
+            )}
             <ChatPanel
               session={activeSession}
               loading={loading}
-              confirmLoading={confirmLoading}
               onStartRun={handleStartRun}
-              onEnqueuePlan={handleEnqueuePlan}
+              locked={isLocked}
               onStartFlow={handleStartFlow}
               onConfirmPlan={confirmPlan}
               onCancelPlan={cancelPlan}
               onUpdateFinalPlan={handleUpdateFinalPlan}
             />
-
-            <QueuePanel
-              queue={queue}
-              paused={paused}
-              onPauseToggle={() => setPaused(!paused)}
-              onTerminate={cancelAll}
-              onClear={clearQueue}
-            />
-
             <PilotComposer
               input={input}
               onInputChange={setInput}

@@ -8,17 +8,14 @@ export interface AppConfig {
     maxEventsDisplay: number;
     dateLocale: string;
   };
-  storage: {
-    workspaceKey: string;
-    sessionKey: string;
-    sessionActiveKey: string;
-    queueKey: string;
-    queuePausedKey: string;
-    baseWorkspaceKey: string;
-    policyKey: string;
-    runOrderKey: string;
-    workspaceHistoryKey: string;
-  };
+    storage: {
+      workspaceKey: string;
+      sessionKey: string;
+      sessionActiveKey: string;
+      baseWorkspaceKey: string;
+      runOrderKey: string;
+      workspaceHistoryKey: string;
+    };
 }
 
 const defaultConfig: AppConfig = {
@@ -35,10 +32,7 @@ const defaultConfig: AppConfig = {
       workspaceKey: "aipl.workspace",
       sessionKey: "aipl.pilot.sessions",
       sessionActiveKey: "aipl.pilot.active",
-      queueKey: "aipl.pilot.queue",
-      queuePausedKey: "aipl.pilot.queuePaused",
       baseWorkspaceKey: "aipl.pilot.baseWorkspace",
-      policyKey: "aipl.pilot.policy",
       runOrderKey: "aipl.dashboard.runOrder",
       workspaceHistoryKey: "aipl.workspace.history"
     }

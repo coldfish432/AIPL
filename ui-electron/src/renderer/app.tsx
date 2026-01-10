@@ -25,6 +25,7 @@ import WorkspaceSelector from "./components/WorkspaceSelector";
 import { addWorkspaceToHistory, loadWorkspaceHistory } from "./lib/workspaceHistory";
 import { STORAGE_KEYS } from "./config/settings";
 import PackagesLayout, { PackagesHome } from "./pages/Packages";
+import ExecutionStatusBar from "./components/ExecutionStatusBar";
 
 function Layout() {
   const location = useLocation();
@@ -108,6 +109,7 @@ function Layout() {
       <main className="content">
         <header className="header">
           <h1>{title}</h1>
+          <ExecutionStatusBar />
         </header>
         <Outlet />
       </main>

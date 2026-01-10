@@ -49,8 +49,12 @@ public class PlanService {
             if (!Files.exists(planPath)) {
                 continue;
             }
-            if (normalizedWorkspace != null && !matchesWorkspace(planPath, execDir, normalizedWorkspace)) {
+            String planWorkspace = readWorkspaceFromPlan(planPath);
+            if (normalizedWorkspace != null && !matchesWorkspace(planWorkspace, execDir, normalizedWorkspace)) {
                 continue;
+            }
+            if (planWorkspace != null && item instanceof ObjectNode) {
+                ((ObjectNode) item).put("workspace_path", planWorkspace);
             }
             filtered.add(item);
         }
@@ -64,8 +68,7 @@ public class PlanService {
         return workspace.replace("\\", "/").trim().toLowerCase();
     }
 
-    private boolean matchesWorkspace(Path planPath, Path execDir, String normalizedWorkspace) {
-        String planWorkspace = readWorkspaceFromPlan(planPath);
+    private boolean matchesWorkspace(String planWorkspace, Path execDir, String normalizedWorkspace) {
         if (planWorkspace != null && planWorkspace.startsWith(normalizedWorkspace)) {
             return true;
         }

@@ -13,6 +13,7 @@ from dataclasses import asdict
 from config import resolve_db_path
 from detect_workspace import detect_workspace
 from infra.io_utils import append_jsonl, read_json, write_json
+from infra.path_guard import normalize_path
 from state import append_state_events, build_transition_event
 from profile_store import ensure_profile_tables
 from services.profile_service import compute_fingerprint, compute_workspace_id
@@ -54,8 +55,11 @@ def _format_conversation(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def run_codex_chat(prompt: str, root_dir: Path) -> str:
-    schema_path = root_dir / "schemas" / "chat.schema.json"
+def run_codex_chat(prompt: str, root_dir: Path, workspace: Path | None = None) -> str:
+    """
+    Run Codex chat from the given workspace (if supplied) or the engine root.
+    """
+    schema_path = (root_dir / "schemas" / "chat.schema.json").resolve()
     codex_bin = os.environ.get("CODEX_BIN") or shutil.which("codex")
     if not codex_bin and os.name == "nt":
         for cand in ("codex.cmd", "codex.exe", "codex.bat"):
@@ -63,10 +67,11 @@ def run_codex_chat(prompt: str, root_dir: Path) -> str:
             if codex_bin:
                 break
     codex_bin = codex_bin or "codex"
+    work_dir = str(workspace.resolve()) if workspace else str(root_dir)
     cmd = [
         codex_bin, "exec", "--full-auto",
         "--sandbox", "workspace-write",
-        "-C", str(root_dir),
+        "-C", work_dir,
         "--skip-git-repo-check",
         "--output-schema", str(schema_path),
         "--color", "never",
@@ -82,6 +87,88 @@ def run_codex_chat(prompt: str, root_dir: Path) -> str:
         err = _decode_codex_bytes(result.stderr or result.stdout or b"")
         raise RuntimeError((err or "codex failed").strip())
     return _decode_codex_bytes(result.stdout or b"").strip()
+
+
+def _build_workspace_context(root: Path, workspace_path: Path | None) -> str:
+    """
+    Build a lightweight workspace context summary for the chat prompt.
+    """
+    if not workspace_path:
+        return "No workspace configured. Please set a workspace path first."
+
+    workspace_path = workspace_path.resolve()
+    parts = [f"**Workspace Path:** `{workspace_path}`"]
+
+    workspace_info = detect_workspace(workspace_path)
+    if workspace_info:
+        project_type = workspace_info.get("project_type", "unknown")
+        parts.append(f"**Project Type:** {project_type}")
+
+        capabilities = workspace_info.get("capabilities", {})
+        detected = capabilities.get("detected", [])
+        if detected:
+            parts.append(f"**Detected Config Files:** {', '.join(detected)}")
+
+        commands = capabilities.get("commands", [])
+        if commands:
+            cmd_list = [f"`{c.get('cmd')}` ({c.get('kind')})" for c in commands if c.get("cmd")]
+            if cmd_list:
+                parts.append(f"**Available Commands:** {', '.join(cmd_list)}")
+
+    IGNORE_DIRS = {'.git', 'node_modules', '__pycache__', '.venv', 'venv',
+                   'dist', 'build', 'target', '.idea', '.vscode', 'coverage'}
+    try:
+        tree_lines = []
+        items = sorted(workspace_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+        for item in items[:40]:
+            if item.name.startswith('.') and item.name not in ('.env.example',):
+                continue
+            if item.name in IGNORE_DIRS:
+                continue
+            prefix = "📁 " if item.is_dir() else "📄 "
+            tree_lines.append(prefix + item.name)
+
+        if tree_lines:
+            parts.append("**Directory Structure:**\n```\n" + "\n".join(tree_lines) + "\n```")
+    except Exception:
+        pass
+
+    key_files_content = []
+    for readme_name in ("README.md", "readme.md", "README.txt", "README"):
+        readme_path = workspace_path / readme_name
+        if readme_path.exists():
+            try:
+                content = readme_path.read_text(encoding="utf-8")
+                if len(content) > 1500:
+                    content = content[:1500] + "\n... (truncated)"
+                key_files_content.append(f"### {readme_name}\n```markdown\n{content}\n```")
+            except Exception:
+                pass
+            break
+
+    config_files = [
+        ("package.json", "json", 1000),
+        ("pyproject.toml", "toml", 800),
+        ("Cargo.toml", "toml", 800),
+        ("pom.xml", "xml", 800),
+        ("go.mod", "go", 500),
+        ("Makefile", "makefile", 500),
+    ]
+    for filename, lang, max_chars in config_files:
+        filepath = workspace_path / filename
+        if filepath.exists():
+            try:
+                content = filepath.read_text(encoding="utf-8")
+                if len(content) > max_chars:
+                    content = content[:max_chars] + "\n... (truncated)"
+                key_files_content.append(f"### {filename}\n```{lang}\n{content}\n```")
+            except Exception:
+                pass
+
+    if key_files_content:
+        parts.append("**Key Files:**\n" + "\n\n".join(key_files_content))
+
+    return "\n\n".join(parts)
 
 
 # envelope
@@ -119,9 +206,33 @@ def _resolve_workspace_id(workspace_id: str | None, workspace: str | None) -> st
 
 # 确保sqliteSchema
 def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, plan_id TEXT, status TEXT, updated_at INTEGER, raw_json TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, updated_at INTEGER, raw_json TEXT)")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS runs (
+            run_id TEXT PRIMARY KEY,
+            plan_id TEXT,
+            status TEXT,
+            workspace TEXT,
+            updated_at INTEGER,
+            raw_json TEXT
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS plans (
+            plan_id TEXT PRIMARY KEY,
+            workspace TEXT,
+            updated_at INTEGER,
+            raw_json TEXT
+        )"""
+    )
     conn.execute("CREATE TABLE IF NOT EXISTS event_cursors (run_id TEXT PRIMARY KEY, cursor INTEGER, updated_at INTEGER)")
+    try:
+        conn.execute("ALTER TABLE runs ADD COLUMN workspace TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE plans ADD COLUMN workspace TEXT")
+    except sqlite3.OperationalError:
+        pass
     ensure_profile_tables(conn)
 
 
@@ -140,12 +251,13 @@ def _mirror_plan_to_sqlite(res: dict, root: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         raw_json = json.dumps(res, ensure_ascii=False)
         now_ms = int(time.time() * 1000)
+        plan_workspace = _resolve_plan_workspace(root, plan_id)
         with sqlite3.connect(str(db_path)) as conn:
             _ensure_sqlite_schema(conn)
             conn.execute(
-                "INSERT INTO plans(plan_id, updated_at, raw_json) VALUES(?,?,?) "
-                "ON CONFLICT(plan_id) DO UPDATE SET updated_at=excluded.updated_at, raw_json=excluded.raw_json",
-                (plan_id, now_ms, raw_json),
+                "INSERT INTO plans(plan_id, workspace, updated_at, raw_json) VALUES(?,?,?,?) "
+                "ON CONFLICT(plan_id) DO UPDATE SET workspace=excluded.workspace, updated_at=excluded.updated_at, raw_json=excluded.raw_json",
+                (plan_id, plan_workspace or "", now_ms, raw_json),
             )
             conn.commit()
     except Exception:
@@ -169,12 +281,18 @@ def _mirror_run_to_sqlite(res: dict, root: Path) -> None:
         now_ms = int(time.time() * 1000)
         plan_id = data.get("plan_id")
         status = data.get("status")
+        workspace = (
+            data.get("workspace_main_root")
+            or data.get("workspace")
+            or data.get("workspace_path")
+            or ""
+        )
         with sqlite3.connect(str(db_path)) as conn:
             _ensure_sqlite_schema(conn)
             conn.execute(
-                "INSERT INTO runs(run_id, plan_id, status, updated_at, raw_json) VALUES(?,?,?,?,?) "
-                "ON CONFLICT(run_id) DO UPDATE SET plan_id=excluded.plan_id, status=excluded.status, updated_at=excluded.updated_at, raw_json=excluded.raw_json",
-                (run_id, plan_id, status, now_ms, raw_json),
+                "INSERT INTO runs(run_id, plan_id, status, workspace, updated_at, raw_json) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(run_id) DO UPDATE SET plan_id=excluded.plan_id, status=excluded.status, workspace=excluded.workspace, updated_at=excluded.updated_at, raw_json=excluded.raw_json",
+                (run_id, plan_id, status, workspace, now_ms, raw_json),
             )
             conn.commit()
     except Exception:
@@ -212,6 +330,7 @@ def resolve_run_dir(root: Path, plan_id: str | None, run_id: str | None) -> Path
 
 
 def _resolve_plan_workspace(root: Path, plan_id: str) -> str | None:
+    """Resolve the workspace path stored with the plan."""
     exec_dir = root / "artifacts" / "executions" / plan_id
     cap_path = exec_dir / "capabilities.json"
     if cap_path.exists():
@@ -223,17 +342,67 @@ def _resolve_plan_workspace(root: Path, plan_id: str) -> str | None:
                     return ws
         except Exception:
             pass
+
     plan_path = exec_dir / "plan.json"
     if plan_path.exists():
         try:
             plan = read_json(plan_path, default={})
             if isinstance(plan, dict):
-                ws = plan.get("workspace")
-                if isinstance(ws, str) and ws.strip():
-                    return ws
+                for key in ["workspace", "workspace_path", "workspace_main_root"]:
+                    ws = plan.get(key)
+                    if isinstance(ws, str) and ws.strip():
+                        return ws
         except Exception:
             pass
+
     return None
+
+
+def list_plans_for_workspace(root: Path, workspace: str | None) -> list[dict]:
+    """List plan metadata, optionally filtered by workspace."""
+    exec_root = root / "artifacts" / "executions"
+    if not exec_root.exists():
+        return []
+
+    plans: list[dict] = []
+    workspace_normalized = normalize_path(workspace) if workspace else None
+
+    for plan_dir in exec_root.iterdir():
+        if not plan_dir.is_dir():
+            continue
+
+        plan_id = plan_dir.name
+        plan_workspace = _resolve_plan_workspace(root, plan_id)
+
+        if workspace_normalized:
+            plan_workspace_normalized = normalize_path(plan_workspace) if plan_workspace else None
+            if plan_workspace_normalized != workspace_normalized:
+                continue
+
+        plan_path = plan_dir / "plan.json"
+        if not plan_path.exists():
+            continue
+
+        try:
+            plan_data = read_json(plan_path, default={})
+        except Exception:
+            continue
+
+        if not isinstance(plan_data, dict):
+            continue
+
+        tasks_count = len(plan_data.get("raw_plan", {}).get("tasks", []))
+        plans.append(
+            {
+                "plan_id": plan_id,
+                "workspace": plan_workspace,
+                "created_ts": plan_data.get("created_ts"),
+                "task_chain_text": plan_data.get("task_chain_text"),
+                "tasks_count": tasks_count,
+            }
+        )
+
+    return sorted(plans, key=lambda x: x.get("created_ts") or 0, reverse=True)
 
 
 # 读取status，检查路径是否存在，读取文件内容
@@ -317,21 +486,102 @@ def read_status(run_dir: Path) -> dict:
         "changed_files_count": meta.get("changed_files_count"),
     }
 def list_runs(exec_dir: Path) -> list[dict]:
+    """List the runs inside the execution directory with extra metadata."""
     runs_dir = exec_dir / "runs"
     if not runs_dir.exists():
         return []
-    runs = []
+    runs: list[dict] = []
     for p in runs_dir.iterdir():
         if not p.is_dir():
             continue
-        runs.append({
+
+        run_info = {
             "run_id": p.name,
             "run_dir": str(p),
             "outputs": str(p / "outputs"),
             "report_path": str(p / "verification_report.md"),
-        })
-    runs.sort(key=lambda x: x["run_id"])
+        }
+
+        meta_path = p / "meta.json"
+        if meta_path.exists():
+            try:
+                meta = read_json(meta_path, default={})
+                if isinstance(meta, dict):
+                    run_info.update(
+                        {
+                            "status": meta.get("status"),
+                            "workspace": meta.get("workspace_main_root")
+                            or meta.get("workspace")
+                            or meta.get("workspace_path"),
+                            "mode": meta.get("mode"),
+                            "task_id": meta.get("task_id"),
+                            "plan_id": meta.get("plan_id"),
+                            "created_at": meta.get("ts"),
+                            "updated_at": meta.get("updated_at"),
+                        }
+                    )
+            except Exception:
+                pass
+
+        runs.append(run_info)
+
+    runs.sort(key=lambda x: x.get("run_id", ""), reverse=True)
     return runs
+
+
+def list_runs_for_workspace(root: Path, workspace: str | None) -> list[dict]:
+    """Filter listed runs by workspace."""
+    exec_root = root / "artifacts" / "executions"
+    if not exec_root.exists():
+        return []
+
+    all_runs: list[dict] = []
+    workspace_normalized = normalize_path(workspace) if workspace else None
+
+    for plan_dir in exec_root.iterdir():
+        if not plan_dir.is_dir():
+            continue
+
+        plan_workspace = _resolve_plan_workspace(root, plan_dir.name)
+        runs = list_runs(plan_dir)
+        for run in runs:
+            if workspace_normalized:
+                run_workspace = run.get("workspace")
+                if run_workspace:
+                    if normalize_path(run_workspace) != workspace_normalized:
+                        continue
+                else:
+                    if not plan_workspace or normalize_path(plan_workspace) != workspace_normalized:
+                        continue
+            all_runs.append(run)
+
+    return sorted(all_runs, key=lambda x: x.get("run_id", ""), reverse=True)
+
+
+def count_runs_by_status(root: Path, workspace: str | None) -> dict:
+    """Return counts grouped by run status."""
+    runs = list_runs_for_workspace(root, workspace)
+
+    counts = {
+        "total": len(runs),
+        "running": 0,
+        "completed": 0,
+        "failed": 0,
+        "awaiting_review": 0,
+    }
+
+    for run in runs:
+        status = (run.get("status") or "").lower()
+        if status in ("running", "doing"):
+            counts["running"] += 1
+        elif status in ("done", "completed", "success"):
+            counts["completed"] += 1
+        elif status == "failed":
+            counts["failed"] += 1
+        elif status == "awaiting_review":
+            counts["awaiting_review"] += 1
+
+    return counts
 
 
 # 列出artifacts，读取文件
@@ -445,6 +695,8 @@ def cmd_run(args, root: Path):
         "mode": status.get("mode"),
         "patchset_path": status.get("patchset_path"),
         "changed_files_count": status.get("changed_files_count"),
+        "workspace_main_root": status.get("workspace_main_root"),
+        "workspace_stage_root": status.get("workspace_stage_root"),
     }
     res = envelope(True, data=data)
     _mirror_run_to_sqlite(res, root)
@@ -473,6 +725,8 @@ def cmd_run_plan(args, root: Path):
         "mode": status.get("mode"),
         "patchset_path": status.get("patchset_path"),
         "changed_files_count": status.get("changed_files_count"),
+        "workspace_main_root": status.get("workspace_main_root"),
+        "workspace_stage_root": status.get("workspace_stage_root"),
     }
     res = envelope(True, data=data)
     _mirror_run_to_sqlite(res, root)
@@ -549,6 +803,8 @@ def cmd_retry(args, root: Path):
         "mode": status.get("mode"),
         "patchset_path": status.get("patchset_path"),
         "changed_files_count": status.get("changed_files_count"),
+        "workspace_main_root": status.get("workspace_main_root"),
+        "workspace_stage_root": status.get("workspace_stage_root"),
     }
     res = envelope(True, data=data)
     _mirror_run_to_sqlite(res, root)
@@ -568,11 +824,20 @@ def cmd_assistant_chat(args, root: Path):
     messages = payload.get("messages", []) if isinstance(payload, dict) else []
     if not isinstance(messages, list):
         messages = []
+
+    workspace_path = None
+    if hasattr(args, "workspace") and args.workspace:
+        workspace_path = Path(args.workspace).resolve()
+
+    workspace_context = _build_workspace_context(root, workspace_path)
     conversation = _format_conversation(messages)
     tmpl_path = root / "prompts" / "chat.txt"
     tmpl = tmpl_path.read_text(encoding="utf-8")
-    prompt = tmpl.format(conversation=conversation)
-    raw_reply = run_codex_chat(prompt.strip(), root)
+    prompt = tmpl.format(
+        workspace_context=workspace_context,
+        conversation=conversation,
+    )
+    raw_reply = run_codex_chat(prompt.strip(), root, workspace_path)
     reply = ""
     try:
         reply_obj = json.loads(_extract_last_json(raw_reply))
@@ -650,18 +915,280 @@ def cmd_artifacts(args, root: Path):
 
 
 
+def load_backlog_map(root: Path) -> dict[str, list[dict]]:
+    backlog_root = root / "backlog"
+    if not backlog_root.exists():
+        return {}
+
+    backlog_map: dict[str, list[dict]] = {}
+    for backlog_file in backlog_root.iterdir():
+        if not backlog_file.is_file():
+            continue
+        try:
+            backlog = read_json(backlog_file, default={})
+        except Exception:
+            continue
+        tasks = backlog.get("tasks", []) if isinstance(backlog, dict) else []
+        if not isinstance(tasks, list):
+            continue
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            workspace = (
+                task.get("workspace_path")
+                or task.get("workspace")
+                or task.get("workspace_main_root")
+                or ""
+            )
+            backlog_map.setdefault(workspace, []).append(task)
+
+    return backlog_map
+
+
+def load_backlog_map_filtered(root: Path, workspace: str | None) -> dict[str, list[dict]]:
+    if not workspace:
+        return load_backlog_map(root)
+    normalized_target = normalize_path(workspace)
+    filtered: dict[str, list[dict]] = {}
+    for ws, tasks in load_backlog_map(root).items():
+        if not ws:
+            continue
+        if normalize_path(ws) == normalized_target:
+            filtered[ws] = tasks
+    return filtered
+
+
+def cmd_dashboard_stats(args, root: Path):
+    workspace = args.workspace
+    plans = list_plans_for_workspace(root, workspace)
+    plan_items = [
+        {
+            "plan_id": plan["plan_id"],
+            "workspace": plan["workspace"],
+            "tasks_count": plan["tasks_count"],
+        }
+        for plan in plans[:20]
+    ]
+
+    run_counts = count_runs_by_status(root, workspace)
+    backlog_map = (
+        load_backlog_map_filtered(root, workspace)
+        if workspace
+        else load_backlog_map(root)
+    )
+    all_tasks = [task for tasks in backlog_map.values() for task in tasks]
+    tasks_by_status: dict[str, int] = {}
+    for task in all_tasks:
+        status = task.get("status") or "unknown"
+        tasks_by_status[status] = tasks_by_status.get(status, 0) + 1
+
+    data = {
+        "workspace": workspace,
+        "plans": {"total": len(plans), "items": plan_items},
+        "runs": run_counts,
+        "tasks": {"total": len(all_tasks), "by_status": tasks_by_status},
+    }
+    print(json.dumps(envelope(True, data=data), ensure_ascii=False))
+
+
 # cmdcancel，写入文件内容，序列化JSON
 def cmd_cancel(args, root: Path):
     run_dir = resolve_run_dir(root, args.plan_id, args.run_id)
     if not run_dir:
         print(json.dumps(envelope(False, error="run not found"), ensure_ascii=False))
         return
+
+    meta_path = run_dir / "meta.json"
+    meta = read_json(meta_path, default={})
+    current_status = meta.get("status", "")
+    plan_id = meta.get("plan_id") or args.plan_id
+
+    if current_status in ("done", "failed", "canceled", "discarded"):
+        print(
+            json.dumps(
+                envelope(
+                    True,
+                    data={
+                        "run_id": run_dir.name,
+                        "plan_id": plan_id,
+                        "status": current_status,
+                        "message": f"run already in terminal state: {current_status}",
+                    },
+                ),
+                ensure_ascii=False,
+            )
+        )
+        return
+
     flag = run_dir / "cancel.flag"
     flag.write_text(str(int(time.time())), encoding="utf-8")
-    data = {"run_id": run_dir.name, "status": "canceled"}
+
+    pause_flag = run_dir / "pause.flag"
+    if pause_flag.exists():
+        pause_flag.unlink()
+
+    meta["status"] = "canceled"
+    meta["canceled_at"] = time.time()
+    write_json(meta_path, meta)
+
+    append_jsonl(
+        run_dir / "events.jsonl",
+        {"type": "run_canceled", "run_id": run_dir.name, "plan_id": plan_id, "ts": time.time()},
+    )
+
+    data = {
+        "run_id": run_dir.name,
+        "plan_id": plan_id,
+        "status": "canceled",
+        "workspace_main_root": meta.get("workspace_main_root", ""),
+    }
     res = envelope(True, data=data)
     _mirror_run_to_sqlite(res, root)
     print(json.dumps(res, ensure_ascii=False))
+
+
+def cmd_pause(args, root: Path):
+    run_dir = resolve_run_dir(root, args.plan_id, args.run_id)
+    if not run_dir:
+        print(json.dumps(envelope(False, error="run not found"), ensure_ascii=False))
+        return
+
+    meta_path = run_dir / "meta.json"
+    meta = read_json(meta_path, default={})
+    current_status = meta.get("status", "")
+    plan_id = meta.get("plan_id") or args.plan_id
+
+    if current_status not in ("running", "doing"):
+        print(json.dumps(envelope(False, error=f"cannot pause: current status is '{current_status}'"), ensure_ascii=False))
+        return
+
+    pause_flag = run_dir / "pause.flag"
+    pause_flag.write_text(str(int(time.time())), encoding="utf-8")
+
+    meta["status"] = "paused"
+    meta["paused_at"] = time.time()
+    write_json(meta_path, meta)
+
+    append_jsonl(
+        run_dir / "events.jsonl",
+        {"type": "run_paused", "run_id": run_dir.name, "plan_id": plan_id, "ts": time.time()},
+    )
+
+    data = {"run_id": run_dir.name, "plan_id": plan_id, "status": "paused"}
+    res = envelope(True, data=data)
+    _mirror_run_to_sqlite(res, root)
+    print(json.dumps(res, ensure_ascii=False))
+
+
+def cmd_resume(args, root: Path):
+    run_dir = resolve_run_dir(root, args.plan_id, args.run_id)
+    if not run_dir:
+        print(json.dumps(envelope(False, error="run not found"), ensure_ascii=False))
+        return
+
+    meta_path = run_dir / "meta.json"
+    meta = read_json(meta_path, default={})
+    current_status = meta.get("status", "")
+    plan_id = meta.get("plan_id") or args.plan_id
+
+    if current_status != "paused":
+        print(json.dumps(envelope(False, error=f"cannot resume: current status is '{current_status}'"), ensure_ascii=False))
+        return
+
+    pause_flag = run_dir / "pause.flag"
+    if pause_flag.exists():
+        pause_flag.unlink()
+
+    meta["status"] = "running"
+    meta["resumed_at"] = time.time()
+    write_json(meta_path, meta)
+
+    append_jsonl(
+        run_dir / "events.jsonl",
+        {"type": "run_resumed", "run_id": run_dir.name, "plan_id": plan_id, "ts": time.time()},
+    )
+
+    data = {"run_id": run_dir.name, "plan_id": plan_id, "status": "running"}
+    res = envelope(True, data=data)
+    _mirror_run_to_sqlite(res, root)
+    print(json.dumps(res, ensure_ascii=False))
+
+
+def cmd_cancel_plan_runs(args, root: Path):
+    if not args.plan_id:
+        print(json.dumps(envelope(False, error="plan_id is required"), ensure_ascii=False))
+        return
+
+    exec_dir = root / "artifacts" / "executions" / args.plan_id
+    runs_dir = exec_dir / "runs"
+
+    if not runs_dir.exists():
+        print(json.dumps(envelope(True, data={"plan_id": args.plan_id, "canceled": 0, "canceled_runs": []}), ensure_ascii=False))
+        return
+
+    canceled_runs: list[str] = []
+
+    for run_dir in runs_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
+
+        meta_path = run_dir / "meta.json"
+        meta = read_json(meta_path, default={})
+        status = meta.get("status", "")
+
+        if status in ("running", "doing", "paused", "starting"):
+            run_id = run_dir.name
+
+            cancel_flag = run_dir / "cancel.flag"
+            cancel_flag.write_text(str(int(time.time())), encoding="utf-8")
+
+            pause_flag = run_dir / "pause.flag"
+            if pause_flag.exists():
+                pause_flag.unlink()
+
+            meta["status"] = "canceled"
+            meta["canceled_at"] = time.time()
+            write_json(meta_path, meta)
+
+            append_jsonl(
+                run_dir / "events.jsonl",
+                {
+                    "type": "run_canceled",
+                    "run_id": run_id,
+                    "plan_id": args.plan_id,
+                    "reason": "plan_canceled",
+                    "ts": time.time(),
+                },
+            )
+
+            _mirror_run_to_sqlite(
+                envelope(
+                    True,
+                    data={
+                        "run_id": run_id,
+                        "plan_id": args.plan_id,
+                        "status": "canceled",
+                        "workspace_main_root": meta.get("workspace_main_root", ""),
+                    },
+                ),
+                root,
+            )
+
+            canceled_runs.append(run_id)
+
+    print(
+        json.dumps(
+            envelope(
+                True,
+                data={
+                    "plan_id": args.plan_id,
+                    "canceled": len(canceled_runs),
+                    "canceled_runs": canceled_runs,
+                },
+            ),
+            ensure_ascii=False,
+        )
+    )
 
 
 # cmd档案，序列化JSON
@@ -1059,7 +1586,17 @@ def cmd_apply(args, root: Path):
     write_json(run_dir / "meta.json", meta)
     append_jsonl(run_dir / "events.jsonl", {"type": "apply_done", "run_id": meta.get("run_id"), "ts": time.time(), "status": "done"})
     append_jsonl(run_dir / "events.jsonl", {"type": "run_done", "run_id": meta.get("run_id"), "status": "done", "passed": True, "ts": time.time()})
-    res = envelope(True, data={"run_id": meta.get("run_id"), "plan_id": meta.get("plan_id"), "status": "done", "apply_results": results})
+    res = envelope(
+        True,
+        data={
+            "run_id": meta.get("run_id"),
+            "plan_id": meta.get("plan_id"),
+            "status": "done",
+            "apply_results": results,
+            "workspace_main_root": meta.get("workspace_main_root"),
+            "workspace_stage_root": meta.get("workspace_stage_root"),
+        },
+    )
     _mirror_run_to_sqlite(res, root)
     print(json.dumps(res, ensure_ascii=False))
 
@@ -1079,7 +1616,16 @@ def cmd_discard(args, root: Path):
     write_json(run_dir / "meta.json", meta)
     append_jsonl(run_dir / "events.jsonl", {"type": "discard_done", "run_id": meta.get("run_id"), "status": "discarded", "ts": time.time()})
     append_jsonl(run_dir / "events.jsonl", {"type": "run_done", "run_id": meta.get("run_id"), "status": "discarded", "passed": False, "ts": time.time()})
-    res = envelope(True, data={"run_id": meta.get("run_id"), "plan_id": meta.get("plan_id"), "status": "discarded"})
+    res = envelope(
+        True,
+        data={
+            "run_id": meta.get("run_id"),
+            "plan_id": meta.get("plan_id"),
+            "status": "discarded",
+            "workspace_main_root": meta.get("workspace_main_root"),
+            "workspace_stage_root": meta.get("workspace_stage_root"),
+        },
+    )
     _mirror_run_to_sqlite(res, root)
     print(json.dumps(res, ensure_ascii=False))
 
@@ -1119,6 +1665,7 @@ def main():
 
     p_chat = sub.add_parser("assistant-chat")
     p_chat.add_argument("--messages-file", required=True)
+    p_chat.add_argument("--workspace", help="workspace path (Codex will run here)")
     p_chat.set_defaults(func=cmd_assistant_chat)
 
     p_status = sub.add_parser("status")
@@ -1138,10 +1685,28 @@ def main():
     p_art.add_argument("--run-id")
     p_art.set_defaults(func=cmd_artifacts)
 
+    p_dashboard = sub.add_parser("dashboard-stats")
+    p_dashboard.add_argument("--workspace")
+    p_dashboard.set_defaults(func=cmd_dashboard_stats)
+
     p_cancel = sub.add_parser("cancel")
     p_cancel.add_argument("--plan-id")
     p_cancel.add_argument("--run-id")
     p_cancel.set_defaults(func=cmd_cancel)
+
+    p_pause = sub.add_parser("pause")
+    p_pause.add_argument("--plan-id")
+    p_pause.add_argument("--run-id")
+    p_pause.set_defaults(func=cmd_pause)
+
+    p_resume = sub.add_parser("resume")
+    p_resume.add_argument("--plan-id")
+    p_resume.add_argument("--run-id")
+    p_resume.set_defaults(func=cmd_resume)
+
+    p_cancel_plan = sub.add_parser("cancel-plan-runs")
+    p_cancel_plan.add_argument("--plan-id", required=True)
+    p_cancel_plan.set_defaults(func=cmd_cancel_plan_runs)
 
     p_apply = sub.add_parser("apply")
     p_apply.add_argument("--plan-id")

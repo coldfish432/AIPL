@@ -31,7 +31,7 @@ public class PlanController {
 
     @PostMapping("/assistant/chat")
     public ApiResponse<JsonNode> assistantChat(@RequestBody AssistantChatRequest req) throws Exception {
-        JsonNode res = assistantService.chat(req.messages, req.message);
+        JsonNode res = assistantService.chat(req.messages, req.message, req.workspace);
         JsonNode data = res.has("data") ? res.get("data") : res;
         return ApiResponse.ok(data);
     }

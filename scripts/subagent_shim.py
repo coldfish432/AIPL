@@ -9,7 +9,7 @@ import sys
 import threading
 
 
-# extractroot
+# extract --root参数
 def _extract_root(argv: list[str]) -> Path | None:
     for idx, arg in enumerate(argv):
         if arg == "--root" and idx + 1 < len(argv):
@@ -31,6 +31,78 @@ from config import POLICY_ENFORCED
 from services.code_graph_service import CodeGraph
 
 
+def _find_conda_executable() -> str | None:
+    """Locate a usable conda executable."""
+    conda_exe = os.environ.get("CONDA_EXE")
+    if conda_exe and Path(conda_exe).exists():
+        return conda_exe
+
+    for name in ("conda.exe", "conda.bat", "conda"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    common_paths = [
+        Path(os.environ.get("USERPROFILE", "")) / "Anaconda3" / "Scripts" / "conda.exe",
+        Path(os.environ.get("USERPROFILE", "")) / "miniconda3" / "Scripts" / "conda.exe",
+        Path("C:/ProgramData/Anaconda3/Scripts/conda.exe"),
+        Path("C:/ProgramData/miniconda3/Scripts/conda.exe"),
+    ]
+    for path in common_paths:
+        if path.exists():
+            return str(path)
+
+    return None
+
+
+def _verify_conda_environment() -> tuple[bool, str]:
+    """Verify the Conda environment is usable."""
+    conda_exe = _find_conda_executable()
+    if not conda_exe:
+        return False, "Conda executable not found"
+
+    try:
+        result = subprocess.run(
+            [conda_exe, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=False,
+        )
+        if result.returncode == 0:
+            return True, result.stdout.strip()
+        return False, f"Conda returned error: {result.stderr.strip()}"
+    except subprocess.TimeoutExpired:
+        return False, "Conda command timed out"
+    except OSError as e:
+        if getattr(e, "winerror", None) == 0xC0000142 or "0xc0000142" in str(e).lower():
+            return False, "Conda DLL initialization failed (0xc0000142). Please reinstall conda."
+        return False, f"OS error: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+
+
+def _prepare_conda_environment() -> dict:
+    """Prepare the environment for running Conda/Codex."""
+    env = os.environ.copy()
+    conda_exe = _find_conda_executable()
+    if conda_exe:
+        conda_dir = Path(conda_exe).parent
+        conda_root = conda_dir.parent
+        paths_to_add = [
+            str(conda_root),
+            str(conda_root / "Library" / "bin"),
+            str(conda_root / "Scripts"),
+            str(conda_dir),
+        ]
+        current_path = env.get("PATH", "")
+        for p in paths_to_add:
+            if p not in current_path:
+                current_path = p + os.pathsep + current_path
+        env["PATH"] = current_path
+    return env
+
+# 规范化命令路径
 def _normalize_cmd_path(path: str | Path) -> str:
     raw = str(path)
     if os.name == "nt" and raw.startswith("\\\\?\\"):
@@ -39,7 +111,6 @@ def _normalize_cmd_path(path: str | Path) -> str:
 
 
 # 调用 Codex，返回符合 schema 的 JSON 字符串
-# Run Codex and return schema JSON
 def run_codex(prompt: str, root_dir: Path, run_dir: Path, round_dir: Path) -> str:
     """Run Codex and return schema JSON."""
     schema_path = root_dir / "schemas" / "codex_writes.schema.json"
@@ -59,6 +130,11 @@ def run_codex(prompt: str, root_dir: Path, run_dir: Path, round_dir: Path) -> st
     error_path = io_root / "writes_error.log"
     prompt_path.write_text(prompt, encoding="utf-8")
     status_path = round_dir / "codex_status.txt"
+    conda_ok, conda_msg = _verify_conda_environment()
+    if not conda_ok:
+        status_path.write_text(f"Conda environment error: {conda_msg}", encoding="utf-8")
+        append_jsonl(run_dir / "events.jsonl", {"type": "codex_failed", "ts": time.time(), "round_dir": str(round_dir), "error": "conda_environment_error", "detail": conda_msg})
+        raise RuntimeError(f"Conda environment error: {conda_msg}")
     hb_path = round_dir / "codex_heartbeat.txt"
     status_path.write_text("Codex start: preparing request", encoding="utf-8")
     cmd = [
@@ -84,6 +160,7 @@ def run_codex(prompt: str, root_dir: Path, run_dir: Path, round_dir: Path) -> st
     hb_thread.start()
     status_path.write_text("Codex start: running subprocess", encoding="utf-8")
     append_jsonl(run_dir / "events.jsonl", {"type": "codex_start", "ts": time.time(), "round_dir": str(round_dir)})
+    env = _prepare_conda_environment()
     try:
         with prompt_path.open("r", encoding="utf-8") as stdin, output_path.open("w", encoding="utf-8") as stdout, error_path.open(
             "w", encoding="utf-8"
@@ -95,11 +172,25 @@ def run_codex(prompt: str, root_dir: Path, run_dir: Path, round_dir: Path) -> st
                 stderr=stderr,
                 shell=False,
                 timeout=600,
+                env=env,
             )
     except subprocess.TimeoutExpired:
         status_path.write_text("Codex timeout: exceeded 600s waiting for response", encoding="utf-8")
         append_jsonl(run_dir / "events.jsonl", {"type": "codex_timeout", "ts": time.time(), "round_dir": str(round_dir)})
         raise RuntimeError("Codex timeout: exceeded 600s waiting for response")
+    except OSError as e:
+        if getattr(e, "winerror", None) == 0xC0000142 or "0xc0000142" in str(e).lower():
+            error_msg = (
+                "Conda/Codex DLL initialization failed (0xc0000142).\n"
+                "Possible solutions:\n"
+                "1. Reinstall Anaconda/Miniconda\n"
+                "2. Run as administrator\n"
+                "3. Check for conflicting Python installations"
+            )
+            status_path.write_text(error_msg, encoding="utf-8")
+            append_jsonl(run_dir / "events.jsonl", {"type": "codex_failed", "ts": time.time(), "round_dir": str(round_dir), "error": "conda_dll_init_failed", "detail": error_msg})
+            raise RuntimeError(error_msg)
+        raise
     finally:
         stop_event.set()
     if result.returncode != 0:
@@ -111,6 +202,8 @@ def run_codex(prompt: str, root_dir: Path, run_dir: Path, round_dir: Path) -> st
     status_path.write_text("Codex done: response received", encoding="utf-8")
     append_jsonl(run_dir / "events.jsonl", {"type": "codex_done", "ts": time.time(), "round_dir": str(round_dir)})
     return output_path.read_text(encoding="utf-8", errors="replace")
+
+# 加载任务规格，检查路径是否存在，解析JSON
 def load_task_spec(root: Path, task_id: str) -> dict:
     backlog_dir = root / "backlog"
     if not backlog_dir.exists():
@@ -189,7 +282,7 @@ def _load_code_graph(root: Path, run_dir: Path) -> CodeGraph | None:
         return None
 
 
-# summarizerelatedfiles，读取文件内容，检查路径是否存在
+# 读取文件内容，检查路径是否存在
 def _summarize_related_files(graph: CodeGraph, seed_paths: list[str], max_files: int = 20, max_lines: int = 200) -> str:
     related = graph.related_files(seed_paths, max_hops=2)
     if not related:
@@ -212,7 +305,7 @@ def _summarize_related_files(graph: CodeGraph, seed_paths: list[str], max_files:
     return "\n\n".join(blocks) if blocks else "none"
 
 
-# snapshot输出，读取文件内容
+# 读取outputs目录下的文件内容
 def snapshot_outputs(outputs_dir: Path, max_chars_per_file: int = 4000) -> dict:
     snap = {}
     for p in outputs_dir.glob("**/*"):
@@ -226,7 +319,7 @@ def snapshot_outputs(outputs_dir: Path, max_chars_per_file: int = 4000) -> dict:
     return snap
 
 
-# 解析under
+# 解析相对路径，检查路径是否合法
 def resolve_under(base: Path, rel_path: str) -> Path | None:
     rel_path = rel_path.replace("\\", "/")
     if rel_path.startswith("/") or rel_path.startswith("\\"):
@@ -242,7 +335,7 @@ def resolve_under(base: Path, rel_path: str) -> Path | None:
     return dest
 
 
-# 判断是否allowed
+# 检查路径是否允许
 def is_allowed(path: Path, allowlist: list[str], denylist: list[str]) -> bool:
     posix = path.as_posix()
     for d in denylist:
@@ -256,7 +349,7 @@ def is_allowed(path: Path, allowlist: list[str], denylist: list[str]) -> bool:
     return False
 
 
-# applywrites，写入文件内容，创建目录
+# 写入文件内容，创建目录
 def apply_writes(
     run_dir: Path,
     workspace: Path,
@@ -301,10 +394,7 @@ def run_commands(
     allowed_prefix: tuple[str, ...] = tuple(DEFAULT_ALLOWED_COMMANDS),
     enforce_policy: bool = True,
 ) -> tuple[list[dict], bool]:
-    """
-    执行允许的命令，cwd=workspace。commands 可以是字符串或 {cmd, timeout}。
-    白名单前缀：python / pytest / mvn / gradle / npm / node / pnpm / yarn
-    """
+
     logs = []
     all_passed = True
     if not isinstance(commands, list):

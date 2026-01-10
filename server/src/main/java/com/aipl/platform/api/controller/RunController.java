@@ -18,6 +18,7 @@ import java.awt.Desktop;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
@@ -148,6 +149,41 @@ public class RunController {
     @PostMapping("/runs/{runId}/cancel")
     public ApiResponse<JsonNode> cancel(@PathVariable String runId, @RequestParam(required = false) String planId) throws Exception {
         JsonNode res = runService.cancel(planId, runId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+    @PostMapping("/pause")
+    public ApiResponse<JsonNode> pause(@RequestBody Map<String, String> payload) throws Exception {
+        String runId = payload.get("runId");
+        if (runId == null || runId.isBlank()) {
+            return ApiResponse.fail("runId is required");
+        }
+        String planId = payload.get("planId");
+        JsonNode res = runService.pause(planId, runId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+    @PostMapping("/resume")
+    public ApiResponse<JsonNode> resume(@RequestBody Map<String, String> payload) throws Exception {
+        String runId = payload.get("runId");
+        if (runId == null || runId.isBlank()) {
+            return ApiResponse.fail("runId is required");
+        }
+        String planId = payload.get("planId");
+        JsonNode res = runService.resume(planId, runId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+    @PostMapping("/cancel-plan-runs")
+    public ApiResponse<JsonNode> cancelPlanRuns(@RequestBody Map<String, String> payload) throws Exception {
+        String planId = payload.get("planId");
+        if (planId == null || planId.isBlank()) {
+            return ApiResponse.fail("planId is required");
+        }
+        JsonNode res = runService.cancelPlanRuns(planId);
         JsonNode data = res.has("data") ? res.get("data") : res;
         return ApiResponse.ok(data);
     }

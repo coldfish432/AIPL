@@ -84,6 +84,29 @@ public class EngineClient {
         return exec(cmd);
     }
 
+    public JsonNode pause(String planId, String runId) throws Exception {
+        List<String> cmd = new EngineCommandBuilder("pause", engineRoot.toString())
+                .arg("--plan-id", planId)
+                .arg("--run-id", runId)
+                .build();
+        return exec(cmd);
+    }
+
+    public JsonNode resume(String planId, String runId) throws Exception {
+        List<String> cmd = new EngineCommandBuilder("resume", engineRoot.toString())
+                .arg("--plan-id", planId)
+                .arg("--run-id", runId)
+                .build();
+        return exec(cmd);
+    }
+
+    public JsonNode cancelPlanRuns(String planId) throws Exception {
+        List<String> cmd = new EngineCommandBuilder("cancel-plan-runs", engineRoot.toString())
+                .arg("--plan-id", planId)
+                .build();
+        return exec(cmd);
+    }
+
     public JsonNode apply(String planId, String runId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("apply", engineRoot.toString())
                 .arg("--plan-id", planId)
@@ -145,13 +168,14 @@ public class EngineClient {
         return exec(cmd);
     }
 
-    public JsonNode assistantChat(JsonNode payload) throws Exception {
+    public JsonNode assistantChat(JsonNode payload, String workspace) throws Exception {
         Path dir = engineRoot.resolve("artifacts").resolve("assistant");
         Files.createDirectories(dir);
         Path payloadPath = dir.resolve("assistant-chat-" + System.currentTimeMillis() + ".json");
         mapper.writeValue(payloadPath.toFile(), payload);
         List<String> cmd = new EngineCommandBuilder("assistant-chat", engineRoot.toString())
                 .arg("--messages-file", payloadPath.toString())
+                .arg("--workspace", workspace)
                 .build();
         return exec(cmd);
     }

@@ -6,6 +6,7 @@ D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\LanguagePackContro
 D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\PlanController.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\ProfileController.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\RunController.java
+D:\AIPL\server\src\main\java\com\aipl\platform\api\controller\WorkspaceController.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\AssistantChatMessage.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\AssistantChatRequest.java
 D:\AIPL\server\src\main\java\com\aipl\platform\api\dto\request\AssistantConfirmRequest.java
@@ -44,3 +45,4 @@ D:\AIPL\server\src\main\java\com\aipl\platform\service\LanguagePackService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\PlanService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\ProfileService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\RunService.java
+D:\AIPL\server\src\main\java\com\aipl\platform\service\WorkspaceService.java

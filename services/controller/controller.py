@@ -15,7 +15,7 @@ from services.patchset_service import build_patchset
 from services.stage_workspace import StageWorkspaceManager
 from state import append_state_events, transition_task
 
-from .backlog import load_backlog_map
+from .backlog import load_backlog_map_filtered
 from .policy import is_high_risk, load_policy, merge_checks
 from .reporting import extract_paths_from_checks, extract_paths_from_reasons, write_verification_report
 from .sqlite_mirror import mirror_run_to_sqlite
@@ -64,6 +64,25 @@ def _append_event(run_dir: Path, payload: dict) -> None:
     append_jsonl(run_dir / "events.jsonl", payload)
 
 
+def _check_canceled(run_dir: Path) -> bool:
+    """检查当前 run 是否被标记为取消"""
+    return (run_dir / "cancel.flag").exists()
+
+
+def _check_paused(run_dir: Path) -> bool:
+    """检查当前 run 是否被标记为暂停"""
+    return (run_dir / "pause.flag").exists()
+
+
+def _wait_while_paused(run_dir: Path, check_interval: float = 2.0) -> bool:
+    """在被暂停期间轮询标志；返回 True 表示期间收到取消请求"""
+    while _check_paused(run_dir):
+        if _check_canceled(run_dir):
+            return True
+        time.sleep(check_interval)
+    return False
+
+
 class TaskController:
     def __init__(
         self,
@@ -79,16 +98,17 @@ class TaskController:
 
     def run(self, args: argparse.Namespace) -> None:
         root = self._root
+        initial_workspace = args.workspace
         if args.plan_id:
             backlog_path = root / "backlog" / f"{args.plan_id}.json"
             backlog = read_json(backlog_path, default={"tasks": []})
             tasks_with_path = [(t, backlog_path) for t in backlog.get("tasks", [])]
         else:
-            backlog_map = load_backlog_map(root)
+            backlog_map = load_backlog_map_filtered(root, initial_workspace)
             tasks_with_path = [(t, path) for path, tasks in backlog_map.items() for t in tasks]
             backlog = {"tasks": [t for t, _ in tasks_with_path]}
 
-        task, backlog_path = pick_next_task(tasks_with_path, plan_filter=args.plan_id, workspace=workspace_path)
+        task, backlog_path = pick_next_task(tasks_with_path, plan_filter=args.plan_id, workspace=initial_workspace)
         if not task:
             from curriculum import suggest_next_task
 
@@ -103,7 +123,7 @@ class TaskController:
                 write_json(backlog_path, backlog)
                 print(f"[CURRICULUM] appended {new_task['id']} -> retry pick")
                 task, backlog_path = pick_next_task(
-                    [(t, backlog_path) for t in backlog.get("tasks", [])], plan_filter=args.plan_id, workspace=workspace_path
+                    [(t, backlog_path) for t in backlog.get("tasks", [])], plan_filter=args.plan_id, workspace=initial_workspace
                 )
 
             if not task:
@@ -119,8 +139,11 @@ class TaskController:
         run_dir = exec_dir / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        workspace_path = args.workspace
-        if isinstance(task.get("workspace"), dict) and task["workspace"].get("path"):
+        workspace_path = initial_workspace
+        task_workspace_path = task.get("workspace_path")
+        if isinstance(task_workspace_path, str) and task_workspace_path.strip():
+            workspace_path = task_workspace_path
+        elif isinstance(task.get("workspace"), dict) and task["workspace"].get("path"):
             workspace_path = task["workspace"]["path"]
         workspace_path = str(auto_select_workspace(Path(workspace_path))) if workspace_path else None
         if workspace_path and is_workspace_unsafe(root, Path(workspace_path)):
@@ -138,6 +161,14 @@ class TaskController:
         stage_meta = None
         if workspace_path:
             stage_meta = stage_manager.create_stage(run_id, Path(workspace_path))
+
+        def cleanup_stage() -> None:
+            if not stage_meta or not workspace_path:
+                return
+            stage_root = stage_meta.get("stage_root")
+            if not stage_root:
+                return
+            stage_manager.remove_stage(Path(stage_root), Path(workspace_path))
 
         meta_path = run_dir / "meta.json"
         disable_tests = args.mode != "manual"
@@ -184,6 +215,78 @@ class TaskController:
         max_rounds = max(args.max_rounds, 1)
 
         while task:
+            # ========== 新增：取消检测 ==========
+            if _check_canceled(run_dir):
+                print(f"[CANCELED] Run {run_id} canceled by user request")
+                _append_event(
+                    run_dir,
+                    {
+                        "type": "run_canceled",
+                        "run_id": run_id,
+                        "plan_id": plan_id_for_run,
+                        "ts": time.time(),
+                    },
+                )
+                _write_meta(meta_path, {"status": "canceled", "canceled_at": time.time()})
+                mirror_run_to_sqlite(
+                    root,
+                    {
+                        "run_id": run_id,
+                        "plan_id": plan_id_for_run,
+                        "status": "canceled",
+                        "workspace_main_root": workspace_path,
+                    },
+                )
+                cleanup_stage()
+                return
+            # ========== 新增：暂停检测 ==========
+            if _check_paused(run_dir):
+                print(f"[PAUSED] Run {run_id} paused by user request, waiting for resume...")
+                _append_event(
+                    run_dir,
+                    {
+                        "type": "run_paused",
+                        "run_id": run_id,
+                        "plan_id": plan_id_for_run,
+                        "ts": time.time(),
+                    },
+                )
+                _write_meta(meta_path, {"status": "paused", "paused_at": time.time()})
+                if _wait_while_paused(run_dir):
+                    print(f"[CANCELED] Run {run_id} canceled while paused")
+                    _append_event(
+                        run_dir,
+                        {
+                            "type": "run_canceled",
+                            "run_id": run_id,
+                            "plan_id": plan_id_for_run,
+                            "ts": time.time(),
+                        },
+                    )
+                    _write_meta(meta_path, {"status": "canceled", "canceled_at": time.time()})
+                    mirror_run_to_sqlite(
+                        root,
+                        {
+                            "run_id": run_id,
+                            "plan_id": plan_id_for_run,
+                            "status": "canceled",
+                            "workspace_main_root": workspace_path,
+                        },
+                    )
+                    cleanup_stage()
+                    return
+                print(f"[RESUMED] Run {run_id} resumed")
+                _append_event(
+                    run_dir,
+                    {
+                        "type": "run_resumed",
+                        "run_id": run_id,
+                        "plan_id": plan_id_for_run,
+                        "ts": time.time(),
+                    },
+                )
+                _write_meta(meta_path, {"status": "running", "resumed_at": time.time()})
+            # ========== 新增结束 ==========
             task_id = task["id"]
             task_title = task.get("title", "")
             task["status"] = "doing"
@@ -200,6 +303,20 @@ class TaskController:
             passed = False
 
             for round_id in range(max_rounds):
+                if _check_canceled(run_dir):
+                    print(f"[CANCELED] Run {run_id} canceled during round {round_id}")
+                    _append_event(
+                        run_dir,
+                        {
+                            "type": "run_canceled",
+                            "run_id": run_id,
+                            "plan_id": plan_id_for_run,
+                            "round": round_id,
+                            "ts": time.time(),
+                        },
+                    )
+                    passed_all = False
+                    break
                 mode = "good"
                 round_dir = run_dir / "steps" / step_id / f"round-{round_id}"
                 _append_event(
@@ -293,6 +410,10 @@ class TaskController:
                         payload["validation_reasons"] = validation_reasons
                     write_json(round_dir / "rework_request.json", payload)
 
+            if _check_canceled(run_dir):
+                passed_all = False
+                break
+
             task_checks = task.get("checks", []) if isinstance(task.get("checks"), list) else []
             policy_checks = policy.get("checks", []) if isinstance(policy, dict) else []
             task_risk = task.get("risk_level", task.get("risk", task.get("high_risk")))
@@ -327,7 +448,11 @@ class TaskController:
             _append_event(run_dir, {"type": "step_done", "task_id": task_id, "plan_id": plan_id_for_run, "step": step_id, "ts": time.time()})
 
             if args.plan_id:
-                task, backlog_path = pick_next_task([(t, backlog_path) for t in backlog.get("tasks", [])], plan_filter=args.plan_id)
+                task, backlog_path = pick_next_task(
+                    [(t, backlog_path) for t in backlog.get("tasks", [])],
+                    plan_filter=args.plan_id,
+                    workspace=initial_workspace,
+                )
                 if not task:
                     break
             else:
@@ -376,7 +501,14 @@ class TaskController:
                 },
             )
         final_status = "failed"
-        if passed_all:
+        if _check_canceled(run_dir):
+            final_status = "canceled"
+            _append_event(
+                run_dir,
+                {"type": "run_done", "run_id": run_id, "plan_id": plan_id_for_run, "passed": False, "status": final_status, "ts": time.time()},
+            )
+            _write_meta(meta_path, {"status": final_status})
+        elif passed_all:
             if patchset and len(patchset.changed_files) > 0:
                 final_status = "awaiting_review"
                 _append_event(run_dir, {"type": "awaiting_review", "run_id": run_id, "ts": time.time()})
@@ -389,8 +521,8 @@ class TaskController:
             final_status = "failed"
             _append_event(run_dir, {"type": "run_done", "run_id": run_id, "plan_id": plan_id_for_run, "passed": False, "status": final_status, "ts": time.time()})
             _write_meta(meta_path, {"status": final_status})
-        if final_status in {"done", "failed"} and stage_meta and workspace_path:
-            stage_manager.remove_stage(Path(stage_meta.get("stage_root")), Path(workspace_path))
+        if final_status in {"done", "failed", "canceled"}:
+            cleanup_stage()
 
         try:
             meta_snapshot = json.loads(meta_path.read_text(encoding="utf-8"))

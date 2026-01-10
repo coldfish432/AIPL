@@ -19,7 +19,7 @@ public class AssistantService {
         this.engine = engine;
     }
 
-    public JsonNode chat(List<AssistantChatMessage> messages, String messageFallback) throws Exception {
+    public JsonNode chat(List<AssistantChatMessage> messages, String messageFallback, String workspace) throws Exception {
         ObjectNode payload = mapper.createObjectNode();
         ArrayNode arr = payload.putArray("messages");
         if (messages != null) {
@@ -39,7 +39,7 @@ public class AssistantService {
             node.put("content", messageFallback);
             arr.add(node);
         }
-        return engine.assistantChat(payload);
+        return engine.assistantChat(payload, workspace);
     }
 
     public String buildTaskFromMessages(List<AssistantChatMessage> messages) {

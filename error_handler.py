@@ -46,3 +46,23 @@ def safe_json_load(path, default: Any = None, error_class: type = StorageError):
         return default
     except IOError as exc:
         raise error_class(f"Cannot read {path}: {exc}", {"path": str(path)})
+
+
+class CondaEnvironmentError(Exception):
+    """Conda environment related error."""
+    pass
+
+
+def handle_conda_error(error_code: int, detail: str = "") -> str:
+    """Return user-friendly message for Conda errors."""
+    error_messages = {
+        0xC0000142: (
+            "应用程序无法正常启动 (0xc0000142)\n\n"
+            "可能的解决方案：\n"
+            "1. 重新安装 Anaconda 或 Miniconda\n"
+            "2. 以管理员身份运行\n"
+            "3. 检查是否有多个 Python 安装冲突\n"
+            "4. 将 Conda 路径添加到系统 PATH 环境变量\n"
+        ),
+    }
+    return error_messages.get(error_code, f"未知错误: {hex(error_code)}\n{detail}")

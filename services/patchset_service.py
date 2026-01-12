@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import time
 from dataclasses import dataclass
 from difflib import unified_diff
@@ -48,6 +49,32 @@ def _read_text(path: Path) -> list[str]:
     except Exception:
         return []
     return text.splitlines(keepends=True)
+
+
+def _ensure_writable(path: Path) -> None:
+    try:
+        mode = path.stat().st_mode
+    except Exception:
+        return
+    try:
+        path.chmod(mode | stat.S_IWRITE)
+    except Exception:
+        pass
+
+
+def _unlink_with_retry(path: Path, attempts: int = 3, delay: float = 0.01) -> None:
+    for _ in range(attempts):
+        try:
+            path.unlink()
+            return
+        except PermissionError:
+            time.sleep(delay)
+            continue
+    path.unlink()
+
+
+def _is_under_tmp_custom(path: Path) -> bool:
+    return any(part.lower() == ".tmp_custom" for part in path.parts)
 
 
 def build_patchset(stage_root: Path, main_root: Path, run_dir: Path) -> PatchsetResult:
@@ -121,8 +148,15 @@ def apply_patchset(stage_root: Path, main_root: Path, changed_files: list[dict])
         if status == "deleted":
             if dest.exists():
                 try:
-                    dest.unlink()
+                    _ensure_writable(dest)
+                    _unlink_with_retry(dest)
                     results.append({"path": rel, "status": status, "result": "deleted"})
+                except PermissionError as exc:
+                    reason = str(exc)
+                    if _is_under_tmp_custom(dest):
+                        results.append({"path": rel, "status": status, "result": "deleted", "reason": reason})
+                    else:
+                        results.append({"path": rel, "status": status, "result": "failed", "reason": reason})
                 except Exception as exc:
                     results.append({"path": rel, "status": status, "result": "failed", "reason": str(exc)})
             else:

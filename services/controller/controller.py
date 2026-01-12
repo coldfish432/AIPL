@@ -18,9 +18,10 @@ from state import append_state_events, transition_task
 from .backlog import load_backlog_map_filtered
 from .policy import is_high_risk, load_policy, merge_checks
 from .reporting import extract_paths_from_checks, extract_paths_from_reasons, write_verification_report
-from .sqlite_mirror import mirror_run_to_sqlite
+from sqlite_mirror import mirror_run, update_run_status
 from .task_picker import pick_next_task
 from .workspace import auto_select_workspace
+from workspace_utils import find_plan_workspace, get_backlog_dir, get_plan_dir
 
 __all__ = ["TaskController"]
 
@@ -28,7 +29,9 @@ __all__ = ["TaskController"]
 def _load_code_graph(root: Path, plan_id: str | None, code_graph_service: ICodeGraphService):
     if not plan_id:
         return None
-    plan_path = root / "artifacts" / "executions" / plan_id / "plan.json"
+    workspace = find_plan_workspace(root, plan_id)
+    plan_dir = get_plan_dir(root, workspace, plan_id)
+    plan_path = plan_dir / "plan.json"
     graph_path = None
     if plan_path.exists():
         try:
@@ -37,7 +40,7 @@ def _load_code_graph(root: Path, plan_id: str | None, code_graph_service: ICodeG
         except Exception:
             graph_path = None
     if not graph_path:
-        graph_path = root / "artifacts" / "executions" / plan_id / "code-graph.json"
+        graph_path = plan_dir / "code-graph.json"
     graph_path = Path(graph_path)
     if not graph_path.exists():
         return None
@@ -99,31 +102,37 @@ class TaskController:
     def run(self, args: argparse.Namespace) -> None:
         root = self._root
         initial_workspace = args.workspace
+        plan_workspace = find_plan_workspace(root, args.plan_id) if args.plan_id else None
+        workspace_target = plan_workspace or initial_workspace
+        backlog_dir = get_backlog_dir(root, workspace_target)
+        backlog_dir.mkdir(parents=True, exist_ok=True)
         if args.plan_id:
-            backlog_path = root / "backlog" / f"{args.plan_id}.json"
+            backlog_path = backlog_dir / f"{args.plan_id}.json"
             backlog = read_json(backlog_path, default={"tasks": []})
             tasks_with_path = [(t, backlog_path) for t in backlog.get("tasks", [])]
         else:
-            backlog_map = load_backlog_map_filtered(root, initial_workspace)
+            backlog_map = load_backlog_map_filtered(root, workspace_target)
             tasks_with_path = [(t, path) for path, tasks in backlog_map.items() for t in tasks]
             backlog = {"tasks": [t for t, _ in tasks_with_path]}
 
-        task, backlog_path = pick_next_task(tasks_with_path, plan_filter=args.plan_id, workspace=initial_workspace)
+        task, backlog_path = pick_next_task(tasks_with_path, plan_filter=args.plan_id, workspace=workspace_target)
         if not task:
             from curriculum import suggest_next_task
 
             new_task = suggest_next_task("", backlog)
             if new_task:
                 if args.plan_id:
-                    backlog_path = root / "backlog" / f"{args.plan_id}.json"
+                    backlog_path = backlog_dir / f"{args.plan_id}.json"
                 else:
-                    backlog_path = root / "backlog" / "adhoc.json"
+                    backlog_path = backlog_dir / "adhoc.json"
                 backlog = read_json(backlog_path, default={"tasks": []})
                 backlog.setdefault("tasks", []).append(new_task)
                 write_json(backlog_path, backlog)
                 print(f"[CURRICULUM] appended {new_task['id']} -> retry pick")
                 task, backlog_path = pick_next_task(
-                    [(t, backlog_path) for t in backlog.get("tasks", [])], plan_filter=args.plan_id, workspace=initial_workspace
+                    [(t, backlog_path) for t in backlog.get("tasks", [])],
+                    plan_filter=args.plan_id,
+                    workspace=workspace_target,
                 )
 
             if not task:
@@ -134,10 +143,6 @@ class TaskController:
         plan_id_for_run = plan_id or time.strftime("plan-%Y%m%d-%H%M%S")
 
         run_id = time.strftime("run-%Y%m%d-%H%M%S")
-        exec_dir = root / "artifacts" / "executions" / plan_id_for_run
-        exec_dir.mkdir(parents=True, exist_ok=True)
-        run_dir = exec_dir / "runs" / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
 
         workspace_path = initial_workspace
         task_workspace_path = task.get("workspace_path")
@@ -149,6 +154,11 @@ class TaskController:
         if workspace_path and is_workspace_unsafe(root, Path(workspace_path)):
             print(f"[POLICY] workspace path {workspace_path} includes engine root {root}; refusing to run.")
             return
+
+        exec_dir = get_plan_dir(root, workspace_path, plan_id_for_run)
+        exec_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = exec_dir / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
 
         policy, policy_source, profile, capabilities = load_policy(root, workspace_path, self._profile_service)
         write_json(run_dir / "policy.json", policy)
@@ -228,15 +238,7 @@ class TaskController:
                     },
                 )
                 _write_meta(meta_path, {"status": "canceled", "canceled_at": time.time()})
-                mirror_run_to_sqlite(
-                    root,
-                    {
-                        "run_id": run_id,
-                        "plan_id": plan_id_for_run,
-                        "status": "canceled",
-                        "workspace_main_root": workspace_path,
-                    },
-                )
+                update_run_status(root, run_id, "canceled")
                 cleanup_stage()
                 return
             # ========== 新增：暂停检测 ==========
@@ -264,15 +266,7 @@ class TaskController:
                         },
                     )
                     _write_meta(meta_path, {"status": "canceled", "canceled_at": time.time()})
-                    mirror_run_to_sqlite(
-                        root,
-                        {
-                            "run_id": run_id,
-                            "plan_id": plan_id_for_run,
-                            "status": "canceled",
-                            "workspace_main_root": workspace_path,
-                        },
-                    )
+                    update_run_status(root, run_id, "canceled")
                     cleanup_stage()
                     return
                 print(f"[RESUMED] Run {run_id} resumed")
@@ -528,16 +522,18 @@ class TaskController:
             meta_snapshot = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             meta_snapshot = {}
-        payload = {
-            "run_id": run_id,
-            "plan_id": plan_id_for_run,
-            "status": final_status,
-            "mode": meta_snapshot.get("mode"),
-            "patchset_path": meta_snapshot.get("patchset_path"),
-            "changed_files_count": meta_snapshot.get("changed_files_count"),
-            "workspace_main_root": meta_snapshot.get("workspace_main_root"),
-            "workspace_stage_root": meta_snapshot.get("workspace_stage_root"),
-        }
-        mirror_run_to_sqlite(root, payload)
+        workspace_value = (
+            meta_snapshot.get("workspace_main_root")
+            or meta_snapshot.get("workspace_stage_root")
+            or ""
+        )
+        mirror_run(
+            root,
+            run_id,
+            plan_id_for_run,
+            workspace=workspace_value,
+            status=final_status,
+            task=meta_snapshot.get("task_title", "") or "",
+        )
 
         print(f"[DONE] run={run_dir} status={final_status}")

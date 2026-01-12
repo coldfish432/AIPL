@@ -7,10 +7,22 @@ from .utils import reason
 
 
 def _list_backlog_files(root: Path) -> list[Path]:
-    backlog_dir = root / "backlog"
-    if not backlog_dir.exists():
-        return []
-    return sorted(backlog_dir.glob("*.json"))
+    backlog_files: list[Path] = []
+    default_dir = root / "backlog"
+    if default_dir.exists():
+        backlog_files.extend(default_dir.glob("*.json"))
+
+    workspace_root = root / "artifacts" / "workspaces"
+    if workspace_root.exists():
+        for ws_dir in workspace_root.iterdir():
+            if not ws_dir.is_dir():
+                continue
+            ws_backlog = ws_dir / "backlog"
+            if not ws_backlog.exists():
+                continue
+            backlog_files.extend(ws_backlog.glob("*.json"))
+
+    return sorted(backlog_files)
 
 
 def _find_task_in_backlog(root: Path, task_id: str) -> dict | None:

@@ -1,4 +1,14 @@
-import React, { useEffect, useMemo } from "react";
+/**
+ * App 入口组件
+ * 
+ * 整合：
+ * 1. WorkspaceProvider - 工作区全局状态
+ * 2. ExecutionProvider - 执行状态全局共享
+ * 3. 路由配置
+ * 4. 全局布局（侧边栏工作区选择器）
+ */
+
+import React from "react";
 import {
   HashRouter,
   Navigate,
@@ -6,172 +16,138 @@ import {
   Outlet,
   Route,
   Routes,
-  useLocation,
-  useNavigate,
-  useParams,
-  useSearchParams
 } from "react-router-dom";
-import Dashboard from "./pages/Dashboard";
-import RunDetail from "./pages/RunDetail";
-import Profile from "./pages/Profile";
-import PlanDetail from "./pages/PlanDetail";
-import Pilot from "./pages/Pilot";
-import LanguagePacks from "./pages/LanguagePacks";
-import Memory from "./pages/Memory";
-import { useI18n } from "./lib/useI18n";
-import LanguageSwitch from "./components/LanguageSwitch";
-import { pickWorkspaceDirectory } from "./lib/fileSystem";
-import WorkspaceSelector from "./components/WorkspaceSelector";
-import { addWorkspaceToHistory, loadWorkspaceHistory } from "./lib/workspaceHistory";
-import { STORAGE_KEYS } from "./config/settings";
-import PackagesLayout, { PackagesHome } from "./pages/Packages";
-import ExecutionStatusBar from "./components/ExecutionStatusBar";
 
-function Layout() {
-  const location = useLocation();
-  const params = useParams();
-  const { language, t, toggleLanguage } = useI18n();
-  const [workspace, setWorkspace] = React.useState(() => localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
-  const [workspaceHistory, setWorkspaceHistory] = React.useState<string[]>(() => loadWorkspaceHistory());
+// Contexts
+import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
+import { ExecutionProvider } from "@/contexts/ExecutionContext";
 
-  React.useEffect(() => {
-    const sync = () => {
-      setWorkspace(localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
-      setWorkspaceHistory(loadWorkspaceHistory());
-    };
-    window.addEventListener("aipl-workspace-changed", sync);
-    return () => window.removeEventListener("aipl-workspace-changed", sync);
-  }, []);
+// Components
+import WorkspaceSelector from "@/components/WorkspaceSelector";
+import ExecutionStatusBar from "@/components/ExecutionStatusBar";
 
-  const updateWorkspace = React.useCallback((value: string) => {
-    if (!value) return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    localStorage.setItem(STORAGE_KEYS.workspaceKey, trimmed);
-    setWorkspace(trimmed);
-    addWorkspaceToHistory(trimmed);
-    setWorkspaceHistory(loadWorkspaceHistory());
-    window.dispatchEvent(new Event("aipl-workspace-changed"));
-  }, []);
+// Features
+import Dashboard from "@/features/dashboard/Dashboard";
+import Pilot from "@/features/pilot/Pilot";
+import RunDetail from "@/features/runs/RunDetail";
+import PlanDetail from "@/features/plans/PlanDetail";
+import Profile from "@/features/profile/Profile";
+import Packages from "@/features/packages/Packages";
 
-  const handleBrowseWorkspace = React.useCallback(async () => {
-    const selected = await pickWorkspaceDirectory();
-    if (selected) {
-      updateWorkspace(selected);
-    }
-  }, [updateWorkspace]);
-  const title = useMemo(() => {
-    if (params.runId) return `${t.labels.run} ${params.runId}`;
-    if (params.planId) return `${t.labels.plan} ${params.planId}`;
-    if (location.pathname.startsWith("/pilot")) return t.titles.pilot;
-    if (location.pathname.startsWith("/profile")) return t.titles.profile;
-    return t.titles.dashboard;
-  }, [location.pathname, params.planId, params.runId, t]);
+// Hooks
+import { useI18n } from "@/hooks/useI18n";
 
-  useEffect(() => {
-    document.documentElement.lang = language;
-    document.documentElement.setAttribute("data-lang", language);
-    document.body.setAttribute("data-lang", language);
-  }, [language]);
+// Icons
+import {
+  LayoutDashboard,
+  Navigation,
+  Package,
+  Settings,
+  Globe,
+} from "lucide-react";
+
+// ============================================================
+// Language Switch
+// ============================================================
+
+function LanguageSwitch() {
+  const { language, toggleLanguage } = useI18n();
 
   return (
-    <div className="app">
-      <aside className="nav nav-modern">
-        <div className="nav-brand">
-          <div className="nav-brand-icon">AI</div>
-          <div className="nav-brand-text">AIPL Console</div>
+    <button
+      type="button"
+      className="nav-language-btn"
+      onClick={toggleLanguage}
+      title={language === "zh" ? "Switch to English" : "切换到中文"}
+    >
+      <Globe size={16} />
+      <span>{language === "zh" ? "EN" : "中"}</span>
+    </button>
+  );
+}
+
+// ============================================================
+// Layout
+// ============================================================
+
+function AppLayout() {
+  const { t } = useI18n();
+
+  return (
+    <div className="app-container">
+      {/* 侧边栏 */}
+      <aside className="app-sidebar">
+        {/* Logo */}
+        <div className="app-logo">
+          <span className="app-logo-icon">AIPL</span>
         </div>
-        <WorkspaceSelector
-          current={workspace}
-          label={t.labels.workspace}
-          history={workspaceHistory}
-          onSelect={updateWorkspace}
-          onBrowse={handleBrowseWorkspace}
-        />
-        <div className="nav-menu">
-          <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/dashboard" end>
-            {t.titles.dashboard}
+
+        {/* 工作区选择器 */}
+        <WorkspaceSelector />
+
+        {/* 导航菜单 */}
+        <nav className="app-nav">
+          <NavLink to="/dashboard" className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}>
+            <LayoutDashboard size={18} />
+            <span>{t.titles.dashboard || "仪表盘"}</span>
           </NavLink>
-          <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/pilot" end>
-            {t.titles.pilot}
+          <NavLink to="/pilot" className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}>
+            <Navigation size={18} />
+            <span>{t.titles.pilot || "导航"}</span>
           </NavLink>
-          <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/profile" end>
-            {t.titles.profile}
+          <NavLink to="/packages" className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}>
+            <Package size={18} />
+            <span>{t.titles.packages || "包管理"}</span>
           </NavLink>
-          <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/packages" end>
-            {t.titles.packages}
+          <NavLink to="/profile" className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}>
+            <Settings size={18} />
+            <span>{t.titles.profile || "配置"}</span>
           </NavLink>
-        </div>
-        <div className="nav-language nav-language-bottom">
-          <LanguageSwitch language={language} onToggle={toggleLanguage} />
+        </nav>
+
+        {/* 底部 */}
+        <div className="app-sidebar-footer">
+          <LanguageSwitch />
         </div>
       </aside>
-      <main className="content">
-        <header className="header">
-          <h1>{title}</h1>
-          <ExecutionStatusBar />
-        </header>
-        <Outlet />
+
+      {/* 主内容区 */}
+      <main className="app-main">
+        {/* 全局执行状态栏 */}
+        <ExecutionStatusBar />
+        
+        {/* 页面内容 */}
+        <div className="app-content">
+          <Outlet />
+        </div>
       </main>
     </div>
   );
 }
 
-function DashboardRoute() {
-  const navigate = useNavigate();
-
-  return (
-    <Dashboard
-      onSelectRun={(id, pid) => {
-        const search = pid ? `?planId=${encodeURIComponent(pid)}` : "";
-        navigate(`/runs/${encodeURIComponent(id)}${search}`);
-      }}
-      onSelectPlan={(id) => {
-        navigate(`/plans/${encodeURIComponent(id)}`);
-      }}
-    />
-  );
-}
-
-function RunDetailRoute() {
-  const { runId } = useParams();
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
-  const planId = searchParams.get("planId") || undefined;
-
-  if (!runId) return <Navigate to="/dashboard" replace />;
-
-  return <RunDetail runId={runId} planId={planId} onBack={() => navigate("/dashboard")} />;
-}
-
-function PlanDetailRoute() {
-  const { planId } = useParams();
-  const navigate = useNavigate();
-
-  if (!planId) return <Navigate to="/dashboard" replace />;
-
-  return <PlanDetail planId={planId} onBack={() => navigate("/dashboard")} />;
-}
+// ============================================================
+// App
+// ============================================================
 
 export default function App() {
   return (
     <HashRouter>
-      <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<DashboardRoute />} />
-          <Route path="runs/:runId" element={<RunDetailRoute />} />
-          <Route path="pilot" element={<Pilot />} />
-          <Route path="plans/:planId" element={<PlanDetailRoute />} />
-          <Route path="profile" element={<Profile />} />
-          <Route path="packages" element={<PackagesLayout />}>
-            <Route index element={<Navigate to="language" replace />} />
-            <Route path="language" element={<LanguagePacks />} />
-            <Route path="experience" element={<Memory />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Route>
-      </Routes>
+      <WorkspaceProvider>
+        <ExecutionProvider>
+          <Routes>
+            <Route path="/" element={<AppLayout />}>
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="pilot" element={<Pilot />} />
+              <Route path="runs/:runId" element={<RunDetail />} />
+              <Route path="plans/:planId" element={<PlanDetail />} />
+              <Route path="profile" element={<Profile />} />
+              <Route path="packages" element={<Packages />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Route>
+          </Routes>
+        </ExecutionProvider>
+      </WorkspaceProvider>
     </HashRouter>
   );
 }

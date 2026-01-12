@@ -42,9 +42,9 @@ def backfill_runs(root: Path, dry_run: bool = False) -> None:
     db_path = resolve_db_path(root)
     print(f"Database path: {db_path}")
 
-    exec_root = root / "artifacts" / "executions"
-    if not exec_root.exists():
-        print("No executions directory found under artifacts/executions")
+    ws_root = root / "artifacts" / "workspaces"
+    if not ws_root.exists():
+        print("No workspaces directory found under artifacts/workspaces")
         return
 
     if dry_run:
@@ -57,75 +57,83 @@ def backfill_runs(root: Path, dry_run: bool = False) -> None:
         count = 0
         errors = 0
 
-        for plan_dir in sorted(exec_root.iterdir()):
-            if not plan_dir.is_dir():
+        for ws_dir in sorted(ws_root.iterdir()):
+            if not ws_dir.is_dir():
                 continue
 
-            plan_id = plan_dir.name
-            runs_dir = plan_dir / "runs"
-            if not runs_dir.exists():
+            plan_root = ws_dir / "executions"
+            if not plan_root.exists():
                 continue
 
-            plan_workspace = _resolve_plan_workspace(plan_dir)
-
-            for run_dir in sorted(runs_dir.iterdir()):
-                if not run_dir.is_dir():
+            for plan_dir in sorted(plan_root.iterdir()):
+                if not plan_dir.is_dir():
                     continue
 
-                run_id = run_dir.name
-                meta_path = run_dir / "meta.json"
-                if not meta_path.exists():
-                    print(f"  SKIP {plan_id}/{run_id}: missing meta.json")
+                plan_id = plan_dir.name
+                runs_dir = plan_dir / "runs"
+                if not runs_dir.exists():
                     continue
 
-                try:
-                    meta = read_json(meta_path, default={})
-                    status = meta.get("status", "unknown")
-                    workspace = (
-                        meta.get("workspace_main_root")
-                        or meta.get("workspace")
-                        or plan_workspace
-                        or ""
-                    )
-                    now_ms = int(time.time() * 1000)
+                plan_workspace = _resolve_plan_workspace(plan_dir)
 
-                    raw_json = json.dumps(
-                        {
-                            "ok": True,
-                            "ts": int(time.time()),
-                            "data": {
-                                "run_id": run_id,
-                                "plan_id": plan_id,
-                                "status": status,
-                                "workspace_main_root": workspace,
-                                "mode": meta.get("mode"),
+                for run_dir in sorted(runs_dir.iterdir()):
+                    if not run_dir.is_dir():
+                        continue
+
+                    run_id = run_dir.name
+                    meta_path = run_dir / "meta.json"
+                    if not meta_path.exists():
+                        print(f"  SKIP {plan_id}/{run_id}: missing meta.json")
+                        continue
+
+                    try:
+                        meta = read_json(meta_path, default={})
+                        status = meta.get("status", "unknown")
+                        workspace = (
+                            meta.get("workspace_main_root")
+                            or meta.get("workspace")
+                            or plan_workspace
+                            or ""
+                        )
+                        now_ms = int(time.time() * 1000)
+
+                        raw_json = json.dumps(
+                            {
+                                "ok": True,
+                                "ts": int(time.time()),
+                                "data": {
+                                    "run_id": run_id,
+                                    "plan_id": plan_id,
+                                    "status": status,
+                                    "workspace_main_root": workspace,
+                                    "mode": meta.get("mode"),
+                                },
                             },
-                        },
-                        ensure_ascii=False,
-                    )
-
-                    if not dry_run:
-                        conn.execute(
-                            """INSERT INTO runs(run_id, plan_id, status, workspace, updated_at, raw_json) 
-                               VALUES(?,?,?,?,?,?) 
-                               ON CONFLICT(run_id) DO UPDATE SET 
-                               plan_id=excluded.plan_id, 
-                               status=excluded.status, 
-                               workspace=excluded.workspace,
-                               updated_at=excluded.updated_at, 
-                               raw_json=excluded.raw_json""",
-                            (run_id, plan_id, status, workspace, now_ms, raw_json),
+                            ensure_ascii=False,
                         )
 
-                    count += 1
-                    display_workspace = workspace if workspace else "N/A"
-                    print(
-                        f"  OK {plan_id}/{run_id} -> status={status}, workspace={display_workspace}"
-                    )
+                        if not dry_run:
+                            conn.execute(
+                                """INSERT INTO runs(run_id, plan_id, status, workspace, updated_at, raw_json) 
+                                   VALUES(?,?,?,?,?,?) 
+                                   ON CONFLICT(run_id) DO UPDATE SET 
+                                   plan_id=excluded.plan_id, 
+                                   status=excluded.status, 
+                                   workspace=excluded.workspace,
+                                   updated_at=excluded.updated_at, 
+                                   raw_json=excluded.raw_json""",
+                                (run_id, plan_id, status, workspace, now_ms, raw_json),
+                            )
 
-                except Exception as exc:
-                    errors += 1
-                    print(f"  ERROR {plan_id}/{run_id}: {exc}")
+                        count += 1
+                        display_workspace = workspace if workspace else "N/A"
+                        print(
+                            f"  OK {plan_id}/{run_id} -> status={status}, workspace={display_workspace}"
+                        )
+
+                    except Exception as exc:
+                        errors += 1
+                        print(f"  ERROR {plan_id}/{run_id}: {exc}")
 
         if not dry_run:
             conn.commit()

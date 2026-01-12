@@ -1,45 +1,76 @@
+/**
+ * Visibility Polling Hook
+ * 基于页面可见性的轮询
+ */
+
 import { useCallback, useEffect, useRef } from "react";
 
+/**
+ * 当页面可见时执行轮询
+ */
 export function useVisibilityPolling(
-  pollFn: () => void | Promise<void>,
-  intervalMs: number,
-  enabled: boolean = true
-) {
+  callback: () => void | Promise<void>,
+  interval: number,
+  enabled = true
+): void {
+  const callbackRef = useRef(callback);
   const timerRef = useRef<number | null>(null);
 
-  const start = useCallback(() => {
-    if (timerRef.current) return;
-    timerRef.current = window.setInterval(pollFn, intervalMs);
-  }, [pollFn, intervalMs]);
+  // 保持 callback 最新
+  useEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
 
-  const stop = useCallback(() => {
+  // 执行回调
+  const execute = useCallback(async () => {
+    try {
+      await callbackRef.current();
+    } catch {
+      // 忽略错误
+    }
+  }, []);
+
+  // 启动轮询
+  const startPolling = useCallback(() => {
+    if (timerRef.current) return;
+
+    timerRef.current = window.setInterval(execute, interval);
+  }, [execute, interval]);
+
+  // 停止轮询
+  const stopPolling = useCallback(() => {
     if (timerRef.current) {
-      clearInterval(timerRef.current);
+      window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
   }, []);
 
+  // 处理可见性变化
   useEffect(() => {
     if (!enabled) {
-      stop();
+      stopPolling();
       return;
     }
 
-    const handleVisibility = () => {
-      if (document.hidden) {
-        stop();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        execute(); // 立即执行一次
+        startPolling();
       } else {
-        pollFn();
-        start();
+        stopPolling();
       }
     };
 
-    document.addEventListener("visibilitychange", handleVisibility);
-    start();
+    // 初始状态
+    if (document.visibilityState === "visible") {
+      startPolling();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibility);
-      stop();
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [enabled, start, stop, pollFn]);
+  }, [enabled, execute, startPolling, stopPolling]);
 }

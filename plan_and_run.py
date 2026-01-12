@@ -1,9 +1,6 @@
 import argparse
 import json
-import os
 import re
-import shutil
-import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -13,31 +10,25 @@ from state import (
     DEFAULT_STALE_SECONDS,
     scan_backlog_for_stale,
 )
+from infra.codex_runner import run_codex_with_files
 from infra.io_utils import read_json, write_json
+from infra.json_utils import read_backlog_tasks
 from services.profile_service import DEFAULT_ALLOWED_COMMANDS, compute_fingerprint
-from config import DEFAULT_DENY_COMMANDS, DEFAULT_DENY_WRITE, resolve_db_path
+from config import DEFAULT_DENY_COMMANDS, DEFAULT_DENY_WRITE
 from policy_validator import validate_checks, default_path_rules, is_safe_relative_path
 from detect_workspace import detect_workspace
 from engine.project_context import ProjectContext
 from services.code_graph_service import CodeGraphService
+from services.controller.workspace import auto_select_workspace
 from services.profile_service import ProfileService
-from infra.path_guard import is_workspace_unsafe, normalize_path
-
-
-def _normalize_cmd_path(path: str | Path) -> str:
-    raw = str(path)
-    if os.name == "nt" and raw.startswith("\\\\?\\"):
-        return raw[4:]
-    return raw
-
-
-def _decode_codex_bytes(data: bytes) -> str:
-    for enc in ("utf-8", "gbk"):
-        try:
-            return data.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
+from infra.path_guard import is_workspace_unsafe
+from workspace_utils import (
+    compute_workspace_id,
+    normalize_workspace_path,
+    get_plan_dir,
+    get_backlog_dir,
+)
+from sqlite_mirror import mirror_plan
 
 
 # 合并任务
@@ -58,18 +49,29 @@ def _merge_tasks(tasks: list[dict]) -> list[dict]:
 
 # 列出待办files，检查路径是否存在
 def _list_backlog_files(root: Path) -> list[Path]:
-    backlog_dir = root / "backlog"
-    if not backlog_dir.exists():
-        return []
-    return sorted(backlog_dir.glob("*.json"))
+    backlog_files: list[Path] = []
+    default_dir = root / "backlog"
+    if default_dir.exists():
+        backlog_files.extend(default_dir.glob("*.json"))
+
+    workspace_root = root / "artifacts" / "workspaces"
+    if workspace_root.exists():
+        for ws_dir in workspace_root.iterdir():
+            if not ws_dir.is_dir():
+                continue
+            ws_backlog = ws_dir / "backlog"
+            if not ws_backlog.exists():
+                continue
+            backlog_files.extend(ws_backlog.glob("*.json"))
+
+    return sorted(backlog_files)
 
 
 # 加载待办map，读取文件内容
 def _load_backlog_map(root: Path) -> dict[Path, list[dict]]:
     backlog_map: dict[Path, list[dict]] = {}
     for path in _list_backlog_files(root):
-        data = read_json(path, default={"tasks": []})
-        backlog_map[path] = (data or {}).get("tasks", [])
+        backlog_map[path] = read_backlog_tasks(path)
     return backlog_map
 
 
@@ -100,7 +102,7 @@ def _split_tasks_by_plan(tasks: list[dict]) -> tuple[list[dict], dict[str, list[
 
 
 # 写入计划snapshot，写入文件内容，创建目录
-def _write_plan_snapshot(root: Path, plan_id: str, stop_reason: str) -> None:
+def _write_plan_snapshot(root: Path, workspace: str | Path | None, plan_id: str, stop_reason: str) -> None:
     backlog_map = _load_backlog_map(root)
     tasks = []
     for entries in backlog_map.values():
@@ -113,7 +115,7 @@ def _write_plan_snapshot(root: Path, plan_id: str, stop_reason: str) -> None:
         "stop_reason": stop_reason,
         "tasks": _merge_tasks(tasks),
     }
-    exec_dir = root / "artifacts" / "executions" / plan_id
+    exec_dir = get_plan_dir(root, workspace, plan_id)
     exec_dir.mkdir(parents=True, exist_ok=True)
     write_json(exec_dir / "snapshot.json", snapshot)
 
@@ -121,44 +123,8 @@ def _write_plan_snapshot(root: Path, plan_id: str, stop_reason: str) -> None:
 # 运行codex计划，执行外部命令
 def run_codex_plan(prompt: str, root_dir: Path) -> str:
     schema_path = root_dir / "schemas" / "plan.schema.json"
-    codex_bin = os.environ.get("CODEX_BIN") or shutil.which("codex")
-    if not codex_bin and os.name == "nt":
-        for cand in ("codex.cmd", "codex.exe", "codex.bat"):
-            codex_bin = shutil.which(cand)
-            if codex_bin:
-                break
-    codex_bin = _normalize_cmd_path(codex_bin or "codex")
-    root_arg = _normalize_cmd_path(root_dir)
-    schema_arg = _normalize_cmd_path(schema_path)
     io_root = root_dir / ".tmp_custom" / "codex_io"
-    io_root.mkdir(parents=True, exist_ok=True)
-    prompt_path = io_root / "plan_prompt.txt"
-    output_path = io_root / "plan_output.json"
-    error_path = io_root / "plan_error.log"
-    prompt_path.write_text(prompt, encoding="utf-8")
-    cmd = [
-        codex_bin, "exec", "--full-auto",
-        "--sandbox", "workspace-write",
-        "-C", root_arg,
-        "--skip-git-repo-check",
-        "--output-schema", schema_arg,
-        "--color", "never",
-    ]
-    with prompt_path.open("r", encoding="utf-8") as stdin, output_path.open("w", encoding="utf-8") as stdout, error_path.open(
-        "w", encoding="utf-8"
-    ) as stderr:
-        result = subprocess.run(
-            cmd,
-            stdin=stdin,
-            stdout=stdout,
-            stderr=stderr,
-            shell=False,
-        )
-    if result.returncode != 0:
-        err = _decode_codex_bytes(error_path.read_bytes()) if error_path.exists() else ""
-        out = _decode_codex_bytes(output_path.read_bytes()) if output_path.exists() else ""
-        raise RuntimeError((err or out or "codex failed").strip())
-    return _decode_codex_bytes(output_path.read_bytes()).strip()
+    return run_codex_with_files(prompt, root_dir, schema_path, io_dir=io_root)
 
 
 # 判断是否包含todo
@@ -259,33 +225,6 @@ def _normalize_checks(checks: list[dict]) -> list[dict]:
     return normalized
 
 
-def _auto_select_workspace(workspace: Path) -> Path:
-    workspace = workspace.resolve()
-    info = detect_workspace(workspace)
-    detected = info.get("detected") or []
-    if info.get("project_type") != "unknown" or detected or info.get("checks"):
-        return workspace
-    candidates: list[tuple[int, Path]] = []
-    deny = set(DEFAULT_DENY_WRITE or [])
-    for child in sorted(workspace.iterdir()):
-        if not child.is_dir():
-            continue
-        name = child.name
-        if name.startswith(".") or name in deny:
-            continue
-        sub_info = detect_workspace(child)
-        sub_detected = sub_info.get("detected") or []
-        if sub_info.get("project_type") == "unknown" and not sub_detected and not sub_info.get("checks"):
-            continue
-        score = len(sub_detected) + (1 if sub_info.get("checks") else 0)
-        candidates.append((score, child))
-    if not candidates:
-        return workspace
-    candidates.sort(key=lambda item: (-item[0], item[1].name.lower()))
-    chosen = candidates[0][1]
-    print(f"[WORKSPACE] auto-selected subdir: {chosen}")
-    return chosen
-
 
 # build readable task chain text
 def build_task_chain_text(tasks: list[dict]) -> str:
@@ -300,38 +239,6 @@ def build_task_chain_text(tasks: list[dict]) -> str:
         lines.append(f"{idx}. {title} [{step_id}] (deps: {dep_text})")
     return "\n".join(lines)
 
-
-def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, plan_id TEXT, status TEXT, updated_at INTEGER, raw_json TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, updated_at INTEGER, raw_json TEXT)")
-
-
-def _mirror_plan_to_sqlite(root: Path, plan_id: str, tasks_count: int) -> None:
-    db_path = resolve_db_path(root)
-    if not db_path:
-        return
-    try:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        now_ms = int(time.time() * 1000)
-        payload = {
-            "ok": True,
-            "ts": int(time.time()),
-            "data": {
-                "plan_id": plan_id,
-                "tasks_count": tasks_count,
-            },
-        }
-        raw_json = json.dumps(payload, ensure_ascii=False)
-        with sqlite3.connect(str(db_path)) as conn:
-            _ensure_sqlite_schema(conn)
-            conn.execute(
-                "INSERT INTO plans(plan_id, updated_at, raw_json) VALUES(?,?,?) "
-                "ON CONFLICT(plan_id) DO UPDATE SET updated_at=excluded.updated_at, raw_json=excluded.raw_json",
-                (plan_id, now_ms, raw_json),
-            )
-            conn.commit()
-    except Exception:
-        return
 
 # 主入口，解析命令行参数，读取文件内容
 def main():
@@ -350,7 +257,7 @@ def main():
     parser.add_argument("--mode", default="autopilot", choices=["autopilot", "manual"], help="run mode")
     args = parser.parse_args()
     root = Path(args.root).resolve()
-    backlog_dir = root / "backlog"
+    workspace_path = None
     profile_service = ProfileService()
     code_graph_service = CodeGraphService(cache_root=root)
 
@@ -372,11 +279,11 @@ def main():
     workspace_path = None
     workspace_value = None
     if args.workspace:
-        workspace_path = _auto_select_workspace(Path(args.workspace))
+        workspace_path = auto_select_workspace(Path(args.workspace))
         if is_workspace_unsafe(root, workspace_path):
             print(f"[POLICY] workspace path {workspace_path} includes engine root {root}; refusing to proceed.")
             return
-        workspace_value = normalize_path(workspace_path)
+        workspace_value = normalize_workspace_path(workspace_path)
         context = ProjectContext(root, workspace_path)
         workspace_info = context.workspace_info
         workspace_checks = context.get_default_checks()
@@ -428,7 +335,7 @@ def main():
     if not isinstance(task_chain_text, str) or not task_chain_text.strip():
         task_chain_text = build_task_chain_text(plan_obj.get("tasks", []))
 
-    exec_dir = root / "artifacts" / "executions" / plan_id
+    exec_dir = get_plan_dir(root, workspace_path, plan_id)
     exec_dir.mkdir(parents=True, exist_ok=True)
     if capabilities_block != "none":
         try:
@@ -479,6 +386,8 @@ def main():
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+    backlog_dir = get_backlog_dir(root, workspace_path)
+    backlog_dir.mkdir(parents=True, exist_ok=True)
     existing_ids = {t["id"] for t in backlog.get("tasks", []) if t.get("id")}
     plan_backlog_path = backlog_dir / f"{plan_id}.json"
     plan_backlog = read_json(plan_backlog_path, default={"tasks": []})
@@ -525,6 +434,7 @@ def main():
         exec_dir / "plan.json",
         {
             "plan_id": plan_id,
+            "workspace_id": compute_workspace_id(workspace_path or workspace_value),
             "input_task": user_task,
             "prompt": prompt,
             "raw_plan": plan_obj,
@@ -537,8 +447,14 @@ def main():
             "created_ts": time.time(),
         },
     )
+    mirror_plan(
+        root,
+        plan_id,
+        workspace=str(workspace_path) if workspace_path else "",
+        tasks_count=len(plan_obj.get("tasks", []) or []),
+        input_task=user_task,
+    )
     (exec_dir / "plan.txt").write_text(task_chain_text, encoding="utf-8")
-    _mirror_plan_to_sqlite(root, plan_id, len(plan_obj.get("tasks", []) or []))
     print(f"[PLAN] added {len(plan_obj.get('tasks', []))} tasks to backlog under plan_id={plan_id}")
 
     if args.no_run:
@@ -564,7 +480,7 @@ def main():
             cmd.extend(["--workspace", str(workspace_path)])
         subprocess.check_call(cmd, cwd=root)
 
-    _write_plan_snapshot(root, plan_id, stop_reason)
+    _write_plan_snapshot(root, workspace_path, plan_id, stop_reason)
 
     if args.cleanup:
         backlog_map = _load_backlog_map(root)

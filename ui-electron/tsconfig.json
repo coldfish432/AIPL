@@ -5,6 +5,10 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
+    "baseUrl": "src/renderer",
+    "paths": {
+      "@/*": ["*"]
+    },
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,

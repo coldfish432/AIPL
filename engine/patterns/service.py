@@ -220,9 +220,11 @@ class LanguagePackService:
     def _validate_pack(self, pack_data: dict) -> tuple[bool, str]:
         if not isinstance(pack_data, dict):
             return False, "pack must be an object"
-        if pack_data.get("pack_type") != PACK_TYPE:
+        pack_type = pack_data.get("pack_type")
+        if pack_type and pack_type != PACK_TYPE:
             return False, "pack_type mismatch"
-        if _schema_version(pack_data.get("schema_version")) != SCHEMA_VERSION:
+        schema_value = pack_data.get("schema_version")
+        if schema_value is not None and _schema_version(schema_value) != SCHEMA_VERSION:
             return False, "schema_version mismatch"
         for key in ("command_patterns", "error_signatures", "fix_hints", "detect_patterns", "project_types", "tags"):
             if key in pack_data and not isinstance(pack_data.get(key), list):

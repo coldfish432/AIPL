@@ -8,3 +8,9 @@ contextBridge.exposeInMainWorld("aipl", {
     return ipcRenderer.invoke("aipl-pick-workspace");
   }
 });
+
+contextBridge.exposeInMainWorld("electronAPI", {
+  pickWorkspace: () => {
+    return ipcRenderer.invoke("aipl-pick-workspace");
+  }
+});

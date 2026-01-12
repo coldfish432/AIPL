@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
 import time
 from pathlib import Path
 
@@ -92,72 +89,6 @@ def _run_checks(effective_checks: list[dict], run_dir: Path, workspace: Path | N
     return VerifyResult(passed=passed, reasons=reasons, check_results=check_results, total_duration_ms=total_duration_ms)
 
 
-def _decode_codex_bytes(data: bytes) -> str:
-    for enc in ("utf-8", "gbk"):
-        try:
-            return data.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
-
-
-def _run_codex_failure_summary(prompt: str, root: Path) -> str:
-    schema_path = root / "schemas" / "failure_summary.schema.json"
-    codex_bin = os.environ.get("CODEX_BIN") or shutil.which("codex")
-    if not codex_bin and os.name == "nt":
-        for cand in ("codex.cmd", "codex.exe", "codex.bat"):
-            codex_bin = shutil.which(cand)
-            if codex_bin:
-                break
-    codex_bin = codex_bin or "codex"
-    cmd = [
-        codex_bin,
-        "exec",
-        "--full-auto",
-        "--sandbox",
-        "workspace-write",
-        "-C",
-        str(root),
-        "--skip-git-repo-check",
-        "--output-schema",
-        str(schema_path),
-        "--color",
-        "never",
-    ]
-    result = subprocess.run(
-        cmd,
-        input=prompt.encode("utf-8"),
-        capture_output=True,
-        text=False,
-        shell=False,
-        timeout=600,
-    )
-    if result.returncode != 0:
-        err = _decode_codex_bytes(result.stderr or result.stdout or b"")
-        raise RuntimeError((err or "codex failed").strip())
-    return _decode_codex_bytes(result.stdout or b"").strip()
-
-
-def _format_fallback_failure_zh(reasons: list[dict]) -> str:
-    lines = ["失败原因（自动汇总）："]
-    for item in reasons or []:
-        if not isinstance(item, dict):
-            continue
-        rtype = item.get("type", "unknown")
-        expected = item.get("expected")
-        actual = item.get("actual")
-        hint = item.get("hint")
-        parts = [f"类型: {rtype}"]
-        if expected:
-            parts.append(f"期望: {expected}")
-        if actual:
-            parts.append(f"实际: {actual}")
-        if hint:
-            parts.append(f"提示: {hint}")
-        lines.append(" - " + "；".join(parts))
-    return "\n".join(lines) + "\n"
-
-
 def verify_execution_requirement(check_results: list[dict], effective_checks: list[dict], passed: bool, reasons: list[dict]):
     if not REQUIRE_EXECUTION:
         return passed, reasons
@@ -215,8 +146,6 @@ class VerifierService:
         result = _run_checks(effective_checks, run_dir, workspace, retry_context)
         passed, reasons = verify_execution_requirement(result.check_results, effective_checks, result.passed, result.reasons)
         self._write_verification_result(run_dir, task_id, passed, reasons, result.check_results, result.total_duration_ms)
-        if not passed:
-            self._write_failure_summary(run_dir, task_id, result.check_results, reasons)
         return passed, reasons
 
     def _write_verification_result(
@@ -247,31 +176,6 @@ class VerifierService:
             )
         except Exception:
             return
-
-    def _write_failure_summary(self, run_dir: Path, task_id: str, check_results: list[dict], reasons: list[dict]) -> None:
-        summary_path = run_dir / "failure_summary.json"
-        reason_path = run_dir / "failure_reason_zh.txt"
-        try:
-            tmpl_path = self._root / "prompts" / "failure_summary.txt"
-            tmpl = tmpl_path.read_text(encoding="utf-8")
-            prompt = tmpl.format(
-                task_id=task_id,
-                checks_json=json.dumps(check_results, ensure_ascii=False, indent=2),
-                reasons_json=json.dumps(reasons, ensure_ascii=False, indent=2),
-            )
-            raw = _run_codex_failure_summary(prompt, self._root)
-            summary = json.loads(raw)
-            summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-            text = coerce_text(summary.get("summary_zh", ""))
-            details = coerce_text(summary.get("details_zh", ""))
-            reason_text = (text + "\n" + details).strip() if details else text
-            if reason_text:
-                reason_path.write_text(reason_text + "\n", encoding="utf-8")
-        except Exception:
-            try:
-                reason_path.write_text(_format_fallback_failure_zh(reasons), encoding="utf-8")
-            except Exception:
-                pass
 
     def collect_errors_for_retry(
         self,

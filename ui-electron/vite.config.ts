@@ -62,6 +62,11 @@ function electronDevPlugin() {
 export default defineConfig({
   root: path.resolve(__dirname, "src/renderer"),
   base: "./",
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "src/renderer"),
+    },
+  },
   plugins: [
     react(),
     electronDevPlugin(),

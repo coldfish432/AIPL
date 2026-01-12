@@ -1,5 +1,6 @@
 package com.aipl.platform.repository;
 
+import com.aipl.platform.engine.EnginePaths;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -8,67 +9,88 @@ import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.Statement;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 
 @Component
 public class PlanRepository {
     private final Path dbPath;
+    private final EnginePaths paths;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public PlanRepository(@Value("${app.dbPath}") String dbPath) {
+    public PlanRepository(@Value("${app.dbPath}") String dbPath, EnginePaths paths) {
         this.dbPath = Path.of(dbPath).toAbsolutePath();
+        this.paths = paths;
     }
 
-    public List<JsonNode> listPlansFromDb() throws Exception {
+    private void ensureSchema(Connection conn) throws SQLException {
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS plans (
+                    plan_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    workspace_path TEXT,
+                    tasks_count INTEGER DEFAULT 0,
+                    input_task TEXT,
+                    updated_at INTEGER
+                )
+            """);
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_plans_ws ON plans(workspace_id)");
+        }
+    }
+
+    /**
+     * List plans filtered by workspace.
+     */
+    public List<JsonNode> listPlans(String workspace) throws Exception {
         if (dbPath == null || !Files.exists(dbPath)) {
             return List.of();
         }
+        
+        String workspaceId = paths.computeWorkspaceId(workspace);
         List<JsonNode> items = new ArrayList<>();
+        
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
-            try (Statement init = conn.createStatement()) {
-                init.execute("CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, updated_at INTEGER, raw_json TEXT)");
+            ensureSchema(conn);
+            
+            String sql;
+            PreparedStatement stmt;
+            
+            if (workspace == null || workspace.isBlank()) {
+                sql = "SELECT plan_id, workspace_id, workspace_path, tasks_count, input_task, updated_at FROM plans ORDER BY updated_at DESC";
+                stmt = conn.prepareStatement(sql);
+            } else {
+                sql = "SELECT plan_id, workspace_id, workspace_path, tasks_count, input_task, updated_at FROM plans WHERE workspace_id = ? ORDER BY updated_at DESC";
+                stmt = conn.prepareStatement(sql);
+                stmt.setString(1, workspaceId);
             }
-            try (PreparedStatement stmt = conn.prepareStatement("SELECT plan_id, updated_at, raw_json FROM plans ORDER BY updated_at DESC");
-                 ResultSet rs = stmt.executeQuery()) {
+            
+            try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    String planId = rs.getString("plan_id");
-                    long updatedAt = rs.getLong("updated_at");
-                    String rawJson = rs.getString("raw_json");
                     ObjectNode node = mapper.createObjectNode();
-                    if (rawJson != null && !rawJson.isBlank()) {
-                        try {
-                            JsonNode raw = mapper.readTree(rawJson);
-                            JsonNode data = raw.get("data");
-                            if (data != null && data.isObject()) {
-                                node.setAll((ObjectNode) data);
-                            }
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    if (!node.has("plan_id") && planId != null) {
-                        node.put("plan_id", planId);
-                    }
-                    node.put("updated_at", updatedAt);
+                    node.put("plan_id", rs.getString("plan_id"));
+                    node.put("workspace_id", rs.getString("workspace_id"));
+                    node.put("workspace_path", rs.getString("workspace_path"));
+                    node.put("tasks_count", rs.getInt("tasks_count"));
+                    node.put("input_task", rs.getString("input_task"));
+                    node.put("updated_at", rs.getLong("updated_at"));
                     items.add(node);
                 }
             }
+            stmt.close();
         }
         return items;
     }
 
     public void deletePlan(String planId) throws Exception {
-        if (planId == null || planId.isBlank() || dbPath == null) {
-            return;
-        }
+        if (planId == null || planId.isBlank() || dbPath == null) return;
+        
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
-            try (Statement init = conn.createStatement()) {
-                init.execute("CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, updated_at INTEGER, raw_json TEXT)");
+            ensureSchema(conn);
+            try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM runs WHERE plan_id=?")) {
+                stmt.setString(1, planId);
+                stmt.executeUpdate();
             }
             try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM plans WHERE plan_id=?")) {
                 stmt.setString(1, planId);

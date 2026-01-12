@@ -41,6 +41,7 @@ D:\AIPL\server\src\main\java\com\aipl\platform\repository\RunRepository.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\AssistantService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\ExperiencePackService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\JobService.java
+D:\AIPL\server\src\main\java\com\aipl\platform\service\JsonCaseHelper.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\LanguagePackService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\PlanService.java
 D:\AIPL\server\src\main\java\com\aipl\platform\service\ProfileService.java

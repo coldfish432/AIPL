@@ -1,224 +1,225 @@
-﻿import { useCallback, useEffect, useState } from "react";
-import { loadJson, saveJson } from "../lib/storage";
+/**
+ * Plan Lock Hook
+ * 管理任务链执行锁状态
+ */
 
-export type PlanLockStatus = "idle" | "executing" | "paused" | "awaiting_review";
+import { useCallback, useEffect, useState } from "react";
+import { STORAGE_KEYS } from "@/config/settings";
 
-export type PlanLockState = {
+// ============================================================
+// Types
+// ============================================================
+
+export type LockStatus = "idle" | "planning" | "running" | "reviewing";
+
+export interface PlanLock {
+  status: LockStatus;
   activePlanId: string | null;
   activeRunId: string | null;
-  status: PlanLockStatus;
   pendingReviewRuns: string[];
   lockedAt: number | null;
-};
+}
 
-const LOCK_KEY = "aipl.planLock";
+export interface UsePlanLockReturn {
+  lock: PlanLock;
+  canStartNewPlan: () => { allowed: boolean; reason?: string };
+  lockForPlan: (planId: string) => void;
+  setActiveRunId: (runId: string) => void;
+  addPendingReview: (runId: string) => void;
+  removePendingReview: (runId: string) => void;
+  completeWithoutReview: () => void;
+  forceUnlock: () => void;
+}
 
-const initialState: PlanLockState = {
+// ============================================================
+// Default State
+// ============================================================
+
+const DEFAULT_LOCK: PlanLock = {
+  status: "idle",
   activePlanId: null,
   activeRunId: null,
-  status: "idle",
   pendingReviewRuns: [],
-  lockedAt: null
+  lockedAt: null,
 };
 
-export function usePlanLock() {
-  const [lock, setLock] = useState<PlanLockState>(() =>
-    loadJson<PlanLockState>(LOCK_KEY, initialState)
-  );
+// ============================================================
+// Storage Helpers
+// ============================================================
 
+function loadLock(): PlanLock {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.planLockKey);
+    if (!raw) return DEFAULT_LOCK;
+    
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_LOCK,
+      ...parsed,
+      pendingReviewRuns: Array.isArray(parsed.pendingReviewRuns)
+        ? parsed.pendingReviewRuns
+        : [],
+    };
+  } catch {
+    return DEFAULT_LOCK;
+  }
+}
+
+function saveLock(lock: PlanLock): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.planLockKey, JSON.stringify(lock));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+// ============================================================
+// Hook
+// ============================================================
+
+export function usePlanLock(): UsePlanLockReturn {
+  const [lock, setLock] = useState<PlanLock>(() => loadLock());
+
+  // Persist to storage
   useEffect(() => {
-    saveJson(LOCK_KEY, lock);
+    saveLock(lock);
   }, [lock]);
 
-  const canStartNewPlan = useCallback(() => {
+  // Sync across tabs
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEYS.planLockKey && e.newValue) {
+        try {
+          setLock(JSON.parse(e.newValue));
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  /**
+   * 检查是否可以开始新的计划
+   */
+  const canStartNewPlan = useCallback((): { allowed: boolean; reason?: string } => {
     if (lock.status === "idle") {
       return { allowed: true };
     }
-    if (lock.status === "executing") {
+
+    if (lock.status === "reviewing" && lock.pendingReviewRuns.length > 0) {
       return {
         allowed: false,
-        reason: `任务链 ${lock.activePlanId ?? "-"} 正在执行中`
+        reason: `有 ${lock.pendingReviewRuns.length} 个任务等待审核`,
       };
     }
-    if (lock.status === "paused") {
+
+    if (lock.status === "running") {
       return {
         allowed: false,
-        reason: `任务链 ${lock.activePlanId ?? "-"} 已暂停`
+        reason: "有任务正在执行中",
       };
     }
-    if (lock.status === "awaiting_review") {
+
+    if (lock.status === "planning") {
       return {
         allowed: false,
-        reason: `任务链 ${lock.activePlanId ?? "-"} 有 ${lock.pendingReviewRuns.length} 个待审核`
+        reason: "正在生成计划",
       };
     }
-    return { allowed: true };
+
+    return { allowed: false, reason: "任务链被锁定" };
   }, [lock]);
 
-  const lockForPlan = useCallback((planId: string, runId?: string) => {
-    setLock({
+  /**
+   * 锁定用于计划生成
+   */
+  const lockForPlan = useCallback((planId: string) => {
+    setLock((prev) => ({
+      ...prev,
+      status: "planning",
       activePlanId: planId,
-      activeRunId: runId ?? null,
-      status: "executing",
-      pendingReviewRuns: [],
-      lockedAt: Date.now()
-    });
-  }, []);
-
-  const setActiveRunId = useCallback((runId: string | null) => {
-    setLock((prev) => {
-      if (!prev.activePlanId) {
-        return prev;
-      }
-      if (prev.activeRunId === runId) {
-        return prev;
-      }
-      return { ...prev, activeRunId: runId };
-    });
-  }, []);
-
-  const setAwaitingReview = useCallback((runIds: string[]) => {
-    setLock((prev) => ({
-      ...prev,
-      status: "awaiting_review",
-      pendingReviewRuns: runIds
+      lockedAt: Date.now(),
     }));
   }, []);
 
+  /**
+   * 设置活跃的运行 ID
+   */
+  const setActiveRunId = useCallback((runId: string) => {
+    setLock((prev) => ({
+      ...prev,
+      status: "running",
+      activeRunId: runId,
+    }));
+  }, []);
+
+  /**
+   * 添加待审核的运行
+   */
   const addPendingReview = useCallback((runId: string) => {
-    setLock((prev) => ({
-      ...prev,
-      status: "awaiting_review",
-      pendingReviewRuns: prev.pendingReviewRuns.includes(runId)
-        ? prev.pendingReviewRuns
-        : prev.pendingReviewRuns.concat(runId)
-    }));
-  }, []);
-
-  const removePendingReview = useCallback((runId: string) => {
     setLock((prev) => {
-      const remaining = prev.pendingReviewRuns.filter((id) => id !== runId);
-      if (remaining.length === 0) {
-        return initialState;
+      if (prev.pendingReviewRuns.includes(runId)) {
+        return prev;
       }
       return {
         ...prev,
-        pendingReviewRuns: remaining
+        status: "reviewing",
+        activeRunId: null,
+        pendingReviewRuns: [...prev.pendingReviewRuns, runId],
       };
     });
   }, []);
 
+  /**
+   * 移除待审核的运行
+   */
+  const removePendingReview = useCallback((runId: string) => {
+    setLock((prev) => {
+      const updated = prev.pendingReviewRuns.filter((id) => id !== runId);
+      return {
+        ...prev,
+        pendingReviewRuns: updated,
+        status: updated.length === 0 ? "idle" : "reviewing",
+        activePlanId: updated.length === 0 ? null : prev.activePlanId,
+        lockedAt: updated.length === 0 ? null : prev.lockedAt,
+      };
+    });
+  }, []);
+
+  /**
+   * 完成但无需审核
+   */
   const completeWithoutReview = useCallback(() => {
-    setLock(initialState);
+    setLock((prev) => {
+      if (prev.pendingReviewRuns.length > 0) {
+        return {
+          ...prev,
+          status: "reviewing",
+          activeRunId: null,
+        };
+      }
+      return DEFAULT_LOCK;
+    });
   }, []);
 
-  const resetLock = useCallback(() => {
-    setLock(initialState);
-  }, []);
-
+  /**
+   * 强制解锁
+   */
   const forceUnlock = useCallback(() => {
-    resetLock();
-  }, [resetLock]);
-
-  const forceUnlockLocal = useCallback(() => {
-    resetLock();
-  }, [resetLock]);
-
-  const cancelExecution = useCallback(async (): Promise<boolean> => {
-    if (!lock.activePlanId) return false;
-    try {
-      const res = await fetch("/api/cancel-plan-runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId: lock.activePlanId })
-      });
-      if (!res.ok) {
-        console.error("Cancel failed:", await res.text());
-        return false;
-      }
-      resetLock();
-      return true;
-    } catch (err) {
-      console.error("Cancel error:", err);
-      return false;
-    }
-  }, [lock.activePlanId, resetLock]);
-
-  const pauseExecution = useCallback(async (): Promise<boolean> => {
-    if (!lock.activeRunId || !lock.activePlanId) return false;
-    try {
-      const res = await fetch("/api/pause", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          planId: lock.activePlanId,
-          runId: lock.activeRunId
-        })
-      });
-      if (!res.ok) {
-        console.error("Pause failed:", await res.text());
-        return false;
-      }
-      setLock((prev) => ({ ...prev, status: "paused" }));
-      return true;
-    } catch (err) {
-      console.error("Pause error:", err);
-      return false;
-    }
-  }, [lock.activePlanId, lock.activeRunId]);
-
-  const resumeExecution = useCallback(async (): Promise<boolean> => {
-    if (!lock.activeRunId || !lock.activePlanId) return false;
-    try {
-      const res = await fetch("/api/resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          planId: lock.activePlanId,
-          runId: lock.activeRunId
-        })
-      });
-      if (!res.ok) {
-        console.error("Resume failed:", await res.text());
-        return false;
-      }
-      setLock((prev) => ({ ...prev, status: "executing" }));
-      return true;
-    } catch (err) {
-      console.error("Resume error:", err);
-      return false;
-    }
-  }, [lock.activePlanId, lock.activeRunId]);
-
-  const getStatusText = useCallback((): string => {
-    switch (lock.status) {
-      case "idle":
-        return "空闲";
-      case "executing":
-        return "执行中";
-      case "paused":
-        return "已暂停";
-      case "awaiting_review":
-        return `待审核 (${lock.pendingReviewRuns.length})`;
-      default:
-        return "未知";
-    }
-  }, [lock.status, lock.pendingReviewRuns.length]);
+    setLock(DEFAULT_LOCK);
+  }, []);
 
   return {
     lock,
     canStartNewPlan,
     lockForPlan,
     setActiveRunId,
-    setAwaitingReview,
     addPendingReview,
     removePendingReview,
     completeWithoutReview,
-    cancelExecution,
-    pauseExecution,
-    resumeExecution,
     forceUnlock,
-    forceUnlockLocal,
-    getStatusText
   };
 }

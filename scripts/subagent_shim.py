@@ -1,12 +1,9 @@
 import argparse
 import json
-import os
-import shutil
 import subprocess
 import time
 from pathlib import Path
 import sys
-import threading
 
 
 # extract --root参数
@@ -23,6 +20,7 @@ if not ROOT_DIR:
 ROOT_DIR = ROOT_DIR.resolve()
 sys.path.insert(0, str(ROOT_DIR))
 
+from infra.codex_runner import run_codex_with_files
 from infra.io_utils import append_jsonl, write_json
 from infra.path_guard import is_workspace_unsafe
 from policy_validator import validate_writes, validate_commands, default_path_rules
@@ -31,177 +29,45 @@ from config import POLICY_ENFORCED
 from services.code_graph_service import CodeGraph
 
 
-def _find_conda_executable() -> str | None:
-    """Locate a usable conda executable."""
-    conda_exe = os.environ.get("CONDA_EXE")
-    if conda_exe and Path(conda_exe).exists():
-        return conda_exe
-
-    for name in ("conda.exe", "conda.bat", "conda"):
-        found = shutil.which(name)
-        if found:
-            return found
-
-    common_paths = [
-        Path(os.environ.get("USERPROFILE", "")) / "Anaconda3" / "Scripts" / "conda.exe",
-        Path(os.environ.get("USERPROFILE", "")) / "miniconda3" / "Scripts" / "conda.exe",
-        Path("C:/ProgramData/Anaconda3/Scripts/conda.exe"),
-        Path("C:/ProgramData/miniconda3/Scripts/conda.exe"),
-    ]
-    for path in common_paths:
-        if path.exists():
-            return str(path)
-
-    return None
-
-
-def _verify_conda_environment() -> tuple[bool, str]:
-    """Verify the Conda environment is usable."""
-    conda_exe = _find_conda_executable()
-    if not conda_exe:
-        return False, "Conda executable not found"
-
-    try:
-        result = subprocess.run(
-            [conda_exe, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            shell=False,
-        )
-        if result.returncode == 0:
-            return True, result.stdout.strip()
-        return False, f"Conda returned error: {result.stderr.strip()}"
-    except subprocess.TimeoutExpired:
-        return False, "Conda command timed out"
-    except OSError as e:
-        if getattr(e, "winerror", None) == 0xC0000142 or "0xc0000142" in str(e).lower():
-            return False, "Conda DLL initialization failed (0xc0000142). Please reinstall conda."
-        return False, f"OS error: {e}"
-    except Exception as e:
-        return False, f"Unexpected error: {e}"
-
-
-def _prepare_conda_environment() -> dict:
-    """Prepare the environment for running Conda/Codex."""
-    env = os.environ.copy()
-    conda_exe = _find_conda_executable()
-    if conda_exe:
-        conda_dir = Path(conda_exe).parent
-        conda_root = conda_dir.parent
-        paths_to_add = [
-            str(conda_root),
-            str(conda_root / "Library" / "bin"),
-            str(conda_root / "Scripts"),
-            str(conda_dir),
-        ]
-        current_path = env.get("PATH", "")
-        for p in paths_to_add:
-            if p not in current_path:
-                current_path = p + os.pathsep + current_path
-        env["PATH"] = current_path
-    return env
-
-# 规范化命令路径
-def _normalize_cmd_path(path: str | Path) -> str:
-    raw = str(path)
-    if os.name == "nt" and raw.startswith("\\\\?\\"):
-        return raw[4:]
-    return raw
-
-
-# 调用 Codex，返回符合 schema 的 JSON 字符串
 def run_codex(prompt: str, root_dir: Path, run_dir: Path, round_dir: Path) -> str:
-    """Run Codex and return schema JSON."""
     schema_path = root_dir / "schemas" / "codex_writes.schema.json"
-    codex_bin = os.environ.get("CODEX_BIN") or shutil.which("codex")
-    if not codex_bin and os.name == "nt":
-        for cand in ("codex.cmd", "codex.exe", "codex.bat"):
-            codex_bin = shutil.which(cand)
-            if codex_bin:
-                break
-    codex_bin = _normalize_cmd_path(codex_bin or "codex")
-    root_arg = _normalize_cmd_path(root_dir)
-    schema_arg = _normalize_cmd_path(schema_path)
     io_root = root_dir / ".tmp_custom" / "codex_io"
-    io_root.mkdir(parents=True, exist_ok=True)
-    prompt_path = io_root / "writes_prompt.txt"
-    output_path = io_root / "writes_output.json"
-    error_path = io_root / "writes_error.log"
-    prompt_path.write_text(prompt, encoding="utf-8")
-    status_path = round_dir / "codex_status.txt"
-    conda_ok, conda_msg = _verify_conda_environment()
-    if not conda_ok:
-        status_path.write_text(f"Conda environment error: {conda_msg}", encoding="utf-8")
-        append_jsonl(run_dir / "events.jsonl", {"type": "codex_failed", "ts": time.time(), "round_dir": str(round_dir), "error": "conda_environment_error", "detail": conda_msg})
-        raise RuntimeError(f"Conda environment error: {conda_msg}")
-    hb_path = round_dir / "codex_heartbeat.txt"
-    status_path.write_text("Codex start: preparing request", encoding="utf-8")
-    cmd = [
-        codex_bin, "exec",
-        "--full-auto",
-        "--sandbox", "workspace-write",
-        "-C", root_arg,
-        "--skip-git-repo-check",
-        "--output-schema", schema_arg,
-        "--color", "never",
-    ]
-    stop_event = threading.Event()
-
-    def _heartbeat():
-        while not stop_event.is_set():
-            try:
-                hb_path.write_text(f"heartbeat: {time.time()}", encoding="utf-8")
-            except Exception:
-                pass
-            stop_event.wait(5)
-
-    hb_thread = threading.Thread(target=_heartbeat, daemon=True)
-    hb_thread.start()
-    status_path.write_text("Codex start: running subprocess", encoding="utf-8")
     append_jsonl(run_dir / "events.jsonl", {"type": "codex_start", "ts": time.time(), "round_dir": str(round_dir)})
-    env = _prepare_conda_environment()
+    round_dir.mkdir(parents=True, exist_ok=True)
+    status_path = round_dir / "codex_status.txt"
+    heartbeat_path = round_dir / "codex_heartbeat.txt"
+    heartbeat_path.write_text(str(time.time()), encoding="utf-8")
     try:
-        with prompt_path.open("r", encoding="utf-8") as stdin, output_path.open("w", encoding="utf-8") as stdout, error_path.open(
-            "w", encoding="utf-8"
-        ) as stderr:
-            result = subprocess.run(
-                cmd,
-                stdin=stdin,
-                stdout=stdout,
-                stderr=stderr,
-                shell=False,
-                timeout=600,
-                env=env,
-            )
-    except subprocess.TimeoutExpired:
-        status_path.write_text("Codex timeout: exceeded 600s waiting for response", encoding="utf-8")
-        append_jsonl(run_dir / "events.jsonl", {"type": "codex_timeout", "ts": time.time(), "round_dir": str(round_dir)})
-        raise RuntimeError("Codex timeout: exceeded 600s waiting for response")
-    except OSError as e:
-        if getattr(e, "winerror", None) == 0xC0000142 or "0xc0000142" in str(e).lower():
-            error_msg = (
-                "Conda/Codex DLL initialization failed (0xc0000142).\n"
-                "Possible solutions:\n"
-                "1. Reinstall Anaconda/Miniconda\n"
-                "2. Run as administrator\n"
-                "3. Check for conflicting Python installations"
-            )
-            status_path.write_text(error_msg, encoding="utf-8")
-            append_jsonl(run_dir / "events.jsonl", {"type": "codex_failed", "ts": time.time(), "round_dir": str(round_dir), "error": "conda_dll_init_failed", "detail": error_msg})
-            raise RuntimeError(error_msg)
+        response = run_codex_with_files(prompt, root_dir, schema_path, io_dir=io_root, work_dir=root_dir)
+    except subprocess.TimeoutExpired as exc:
+        append_jsonl(
+            run_dir / "events.jsonl",
+            {
+                "type": "codex_timeout",
+                "ts": time.time(),
+                "round_dir": str(round_dir),
+                "error": "codex_timeout",
+                "detail": str(exc),
+            },
+        )
+        status_path.write_text("Codex timeout\n", encoding="utf-8")
+        raise RuntimeError("Codex timeout") from exc
+    except Exception as exc:
+        append_jsonl(
+            run_dir / "events.jsonl",
+            {
+                "type": "codex_failed",
+                "ts": time.time(),
+                "round_dir": str(round_dir),
+                "error": "codex_failed",
+                "detail": str(exc),
+            },
+        )
+        status_path.write_text("Codex failed\n", encoding="utf-8")
         raise
-    finally:
-        stop_event.set()
-    if result.returncode != 0:
-        err = error_path.read_text(encoding="utf-8", errors="replace") if error_path.exists() else ""
-        out = output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
-        status_path.write_text("Codex failed: non-zero exit", encoding="utf-8")
-        append_jsonl(run_dir / "events.jsonl", {"type": "codex_failed", "ts": time.time(), "round_dir": str(round_dir)})
-        raise RuntimeError((err or out or "codex failed").strip())
-    status_path.write_text("Codex done: response received", encoding="utf-8")
     append_jsonl(run_dir / "events.jsonl", {"type": "codex_done", "ts": time.time(), "round_dir": str(round_dir)})
-    return output_path.read_text(encoding="utf-8", errors="replace")
+    status_path.write_text("Codex done\n", encoding="utf-8")
+    return response.strip()
 
 # 加载任务规格，检查路径是否存在，解析JSON
 def load_task_spec(root: Path, task_id: str) -> dict:

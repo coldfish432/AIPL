@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -30,166 +29,116 @@ public class PlanService {
     }
 
     public JsonNode plan(String task, String planId, String workspace) throws Exception {
-        JsonNode res = engine.plan(task, planId, workspace);
-        runRepository.upsertPlan(res);
-        return res;
+        return engine.plan(task, planId, workspace);
     }
 
+    /**
+     * List plans - read directly from database and filter by workspace.
+     */
     public List<JsonNode> listPlans(String workspace) throws Exception {
-        List<JsonNode> items = planRepository.listPlansFromDb();
-        List<JsonNode> filtered = new ArrayList<>();
-        String normalizedWorkspace = normalizeWorkspace(workspace);
-        for (JsonNode item : items) {
-            String planId = item.path("plan_id").asText(null);
-            if (planId == null || planId.isBlank()) {
-                continue;
-            }
-            Path execDir = paths.getEngineRoot().resolve("artifacts").resolve("executions").resolve(planId);
-            Path planPath = execDir.resolve("plan.json");
-            if (!Files.exists(planPath)) {
-                continue;
-            }
-            String planWorkspace = readWorkspaceFromPlan(planPath);
-            if (normalizedWorkspace != null && !matchesWorkspace(planWorkspace, execDir, normalizedWorkspace)) {
-                continue;
-            }
-            if (planWorkspace != null && item instanceof ObjectNode) {
-                ((ObjectNode) item).put("workspace_path", planWorkspace);
-            }
-            filtered.add(item);
-        }
-        return filtered;
+        return planRepository.listPlans(workspace);
     }
 
-    private String normalizeWorkspace(String workspace) {
-        if (workspace == null || workspace.isBlank()) {
-            return null;
-        }
-        return workspace.replace("\\", "/").trim().toLowerCase();
-    }
-
-    private boolean matchesWorkspace(String planWorkspace, Path execDir, String normalizedWorkspace) {
-        if (planWorkspace != null && planWorkspace.startsWith(normalizedWorkspace)) {
-            return true;
-        }
-        Path runsDir = execDir.resolve("runs");
-        if (!Files.exists(runsDir)) {
-            return false;
-        }
-        try {
-            return Files.list(runsDir).anyMatch((runDir) -> matchesRunMeta(runDir, normalizedWorkspace));
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    private String readWorkspaceFromPlan(Path planPath) {
-        try {
-            JsonNode plan = mapper.readTree(planPath.toFile());
-            String workspace = extractWorkspace(plan);
-            if (workspace != null) {
-                return workspace;
-            }
-            JsonNode planData = plan.get("plan");
-            if (planData != null) {
-                return extractWorkspace(planData);
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
-
-    private String extractWorkspace(JsonNode node) {
-        if (node == null) {
-            return null;
-        }
-        JsonNode ws = node.get("workspace_path");
-        if (ws == null) {
-            ws = node.get("workspace");
-        }
-        if (ws != null && ws.isTextual()) {
-            return ws.asText().replace("\\", "/").trim().toLowerCase();
-        }
-        return null;
-    }
-
-    private boolean matchesRunMeta(Path runDir, String normalizedWorkspace) {
-        Path metaPath = runDir.resolve("meta.json");
-        if (!Files.exists(metaPath)) {
-            return false;
-        }
-        try {
-            JsonNode meta = mapper.readTree(metaPath.toFile());
-            String mainRoot = meta.path("workspace_main_root").asText(null);
-            String stageRoot = meta.path("workspace_stage_root").asText(null);
-            if (mainRoot != null && normalizeWorkspace(mainRoot).startsWith(normalizedWorkspace)) {
-                return true;
-            }
-            return stageRoot != null && normalizeWorkspace(stageRoot).startsWith(normalizedWorkspace);
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
+    /**
+     * Get plan details.
+     */
     public JsonNode planDetail(String planId) throws Exception {
-        Path execDir = paths.getEngineRoot().resolve("artifacts").resolve("executions").resolve(planId);
+        // Walk workspaces to find plan
+        Path wsRoot = paths.getEngineRoot().resolve("artifacts").resolve("workspaces");
+        Path execDir = null;
+        
+        if (Files.exists(wsRoot)) {
+            try (var stream = Files.newDirectoryStream(wsRoot)) {
+                for (Path wsDir : stream) {
+                    if (!Files.isDirectory(wsDir)) continue;
+                    Path candidate = wsDir.resolve("executions").resolve(planId);
+                    if (Files.exists(candidate)) {
+                        execDir = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        ObjectNode payload = mapper.createObjectNode();
+        payload.put("plan_id", planId);
+        
+        if (execDir == null) {
+            return payload;
+        }
+        
         Path planPath = execDir.resolve("plan.json");
         Path planTextPath = execDir.resolve("plan.txt");
         Path snapshotPath = execDir.resolve("snapshot.json");
-        Path backlogPath = paths.getEngineRoot().resolve("backlog").resolve(planId + ".json");
-        ObjectNode payload = mapper.createObjectNode();
-        payload.put("plan_id", planId);
+        
         if (Files.exists(planPath)) {
             payload.set("plan", mapper.readTree(planPath.toFile()));
         }
         if (Files.exists(planTextPath)) {
-            String planText = Files.readString(planTextPath);
-            payload.put("task_chain_text", planText);
+            payload.put("task_chain_text", Files.readString(planTextPath));
         }
         if (Files.exists(snapshotPath)) {
             payload.set("snapshot", mapper.readTree(snapshotPath.toFile()));
-        } else if (Files.exists(backlogPath)) {
-            ObjectNode snapshot = mapper.createObjectNode();
-            snapshot.put("plan_id", planId);
-            snapshot.put("snapshot_ts", System.currentTimeMillis() / 1000.0);
-            snapshot.put("stop_reason", "backlog_fallback");
-            JsonNode backlog = mapper.readTree(backlogPath.toFile());
-            if (backlog != null && backlog.has("tasks")) {
-                snapshot.set("tasks", backlog.get("tasks"));
+        } else {
+            Path backlogDir = execDir.getParent().getParent().resolve("backlog");
+            Path backlogPath = backlogDir.resolve(planId + ".json");
+            if (Files.exists(backlogPath)) {
+                ObjectNode snapshot = mapper.createObjectNode();
+                snapshot.put("plan_id", planId);
+                snapshot.put("snapshot_ts", System.currentTimeMillis() / 1000.0);
+                JsonNode backlog = mapper.readTree(backlogPath.toFile());
+                if (backlog.has("tasks")) {
+                    snapshot.set("tasks", backlog.get("tasks"));
+                }
+                payload.set("snapshot", snapshot);
             }
-            payload.set("snapshot", snapshot);
         }
+        
         return payload;
     }
 
+    /**
+     * Delete plan.
+     */
     public JsonNode deletePlan(String planId) throws Exception {
         ObjectNode payload = mapper.createObjectNode();
         payload.put("plan_id", planId);
+        
         if (planId == null || planId.isBlank()) {
             payload.put("deleted", false);
             return payload;
         }
-        Path execDir = paths.getEngineRoot().resolve("artifacts").resolve("executions").resolve(planId);
-        if (Files.exists(execDir)) {
-            deleteTree(execDir);
+        
+        Path wsRoot = paths.getEngineRoot().resolve("artifacts").resolve("workspaces");
+        if (Files.exists(wsRoot)) {
+            try (var stream = Files.newDirectoryStream(wsRoot)) {
+                for (Path wsDir : stream) {
+                    if (!Files.isDirectory(wsDir)) continue;
+                    
+                    Path execDir = wsDir.resolve("executions").resolve(planId);
+                    if (Files.exists(execDir)) {
+                        deleteTree(execDir);
+                    }
+                    
+                    Path backlogPath = wsDir.resolve("backlog").resolve(planId + ".json");
+                    Files.deleteIfExists(backlogPath);
+                }
+            }
         }
+        
         runRepository.deleteRunsByPlan(planId);
         planRepository.deletePlan(planId);
+        
         payload.put("deleted", true);
         return payload;
     }
 
     private void deleteTree(Path root) throws Exception {
-        if (!Files.exists(root)) {
-            return;
-        }
+        if (!Files.exists(root)) return;
         Files.walk(root)
-                .sorted((a, b) -> b.getNameCount() - a.getNameCount())
-                .forEach(path -> {
-                    try {
-                        Files.deleteIfExists(path);
-                    } catch (Exception ignored) {
-                    }
-                });
+            .sorted((a, b) -> b.getNameCount() - a.getNameCount())
+            .forEach(path -> {
+                try { Files.deleteIfExists(path); } catch (Exception ignored) {}
+            });
     }
 }

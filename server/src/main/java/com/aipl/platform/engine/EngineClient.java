@@ -284,6 +284,22 @@ public class EngineClient {
         return exec(cmd);
     }
 
+    public JsonNode workspaceTree(String workspace, int depth) throws Exception {
+        List<String> cmd = new EngineCommandBuilder("workspace-tree", engineRoot.toString())
+                .arg("--workspace", workspace)
+                .arg("--depth", String.valueOf(depth))
+                .build();
+        return exec(cmd);
+    }
+
+    public JsonNode workspaceRead(String workspace, String path) throws Exception {
+        List<String> cmd = new EngineCommandBuilder("workspace-read", engineRoot.toString())
+                .arg("--workspace", workspace)
+                .arg("--path", path)
+                .build();
+        return exec(cmd);
+    }
+
     private JsonNode exec(List<String> cmd) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(engineRoot.toFile());

@@ -42,14 +42,17 @@ class ExperiencePackService:
     def validate_pack(self, pack_data: dict) -> tuple[bool, str]:
         if not isinstance(pack_data, dict):
             return False, "pack must be an object"
-        if pack_data.get("pack_type") != self.PACK_TYPE:
+        pack_type = pack_data.get("pack_type")
+        if pack_type and pack_type != self.PACK_TYPE:
             return False, "pack_type mismatch"
-        if _schema_version(pack_data.get("schema_version")) != self.SCHEMA_VERSION:
+        schema_value = pack_data.get("schema_version")
+        if schema_value is not None and _schema_version(schema_value) != self.SCHEMA_VERSION:
             return False, "schema_version mismatch"
         for key in ("rules", "extra_checks", "lessons", "patterns", "tags"):
             if key in pack_data and not isinstance(pack_data.get(key), list):
                 return False, f"{key} must be a list"
         return True, ""
+
     def __init__(self, root: Path) -> None:
         self._root = root
 
@@ -136,7 +139,7 @@ class ExperiencePackService:
             description=str(pack_data.get("description", "")),
             author=str(pack_data.get("author", "")),
             tags=[str(t) for t in _safe_list(pack_data.get("tags")) if str(t).strip()],
-            rules=[],
+            rules=[_rule_from(r) for r in _safe_list(pack_data.get("rules")) if isinstance(r, dict)],
             extra_checks=[_check_from(c) for c in _safe_list(pack_data.get("extra_checks")) if isinstance(c, dict)],
             lessons=[_lesson_from(l) for l in _safe_list(pack_data.get("lessons")) if isinstance(l, dict)],
             created_at=float(pack_data.get("created_at", 0) or 0) or now,
@@ -191,13 +194,21 @@ class ExperiencePackService:
     ) -> ImportedPack:
         src = self._memory(from_workspace_id)
         now = _now()
+        rules: list[Rule] = []
+        if include_rules:
+            rules.extend(src.custom_rules.get("rules", []))
+            store = self._rule_store(from_workspace_id)
+            existing_ids = {r.id for r in rules}
+            for rule in store.load():
+                if rule.id not in existing_ids:
+                    rules.append(rule)
         pack = ImportedPack(
             id=f"workspace-{from_workspace_id[:8]}-{uuid.uuid4().hex[:6]}",
             name=f"Workspace {from_workspace_id[:8]}",
             version="1.0.0",
             description="Imported from workspace",
-            rules=[],
-            extra_checks=src.custom_rules.get("extra_checks", []) if include_checks else [],
+            rules=rules if include_rules else [],
+            extra_checks=list(src.custom_rules.get("extra_checks", [])) if include_checks else [],
             lessons=src.lessons if include_lessons else [],
             source="workspace",
             imported_at=now,

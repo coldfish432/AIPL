@@ -25,6 +25,7 @@ async function createWindow() {
     await mainWindow.loadURL(devUrl);
   } else {
     const indexPath = path.join(app.getAppPath(), "dist/renderer/index.html");
+    console.log("Loading renderer:", devUrl);
     await mainWindow.loadURL(pathToFileURL(indexPath).toString());
   }
 }

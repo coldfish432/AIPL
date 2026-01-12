@@ -1,2 +1,2 @@
-collected 2 items
-2 passed, 68 deselected, in 7.73s
+collected 70 items
+70 passed, in 12.01s

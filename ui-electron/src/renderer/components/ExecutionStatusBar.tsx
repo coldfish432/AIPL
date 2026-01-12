@@ -1,112 +1,151 @@
-import { useState } from "react";
+/**
+ * ExecutionStatusBar - 全局执行状态栏
+ * 
+ * 功能：
+ * 1. 显示当前执行状态
+ * 2. 终止执行按钮（统一替代暂停/解锁）
+ * 3. 待审核时显示应用/丢弃按钮
+ */
 
-import { useI18n } from "../lib/useI18n";
-import { usePlanLock } from "../hooks/usePlanLock";
+import React, { useState } from "react";
+import { Play, Square, Check, X, AlertTriangle } from "lucide-react";
+import { useExecution } from "@/contexts/ExecutionContext";
+import { useI18n } from "@/hooks/useI18n";
 
 export default function ExecutionStatusBar() {
-  const { lock, cancelExecution, pauseExecution, resumeExecution, forceUnlockLocal } = usePlanLock();
   const { t } = useI18n();
+  const {
+    execution,
+    status,
+    isExecuting,
+    isAwaitingReview,
+    terminateExecution,
+    applyChanges,
+    discardChanges,
+  } = useExecution();
+
   const [loading, setLoading] = useState(false);
 
-  if (lock.status === "idle") {
+  // 空闲状态不显示
+  if (status === "idle" || !execution) {
     return null;
   }
 
-  const handleCancel = async () => {
-    const confirmText = t.messages?.confirmCancel || "Confirm cancel?";
-    if (!window.confirm(confirmText)) {
+  // 终止执行
+  const handleTerminate = async () => {
+    if (!window.confirm("确定要终止当前执行吗？执行将被标记为强制终止状态。")) {
       return;
     }
     setLoading(true);
-    try {
-      const success = await cancelExecution();
-      if (!success) {
-        window.alert(t.messages?.cancelFailed || "Cancel failed, please try again");
-      }
-    } finally {
-      setLoading(false);
-    }
+    await terminateExecution();
+    setLoading(false);
   };
 
-  const handlePause = async () => {
+  // 应用变更
+  const handleApply = async () => {
+    if (!window.confirm("确定要应用变更吗？")) {
+      return;
+    }
     setLoading(true);
-    try {
-      await pauseExecution();
-    } finally {
-      setLoading(false);
-    }
+    await applyChanges();
+    setLoading(false);
   };
 
-  const handleResume = async () => {
+  // 丢弃变更
+  const handleDiscard = async () => {
+    if (!window.confirm("确定要丢弃变更吗？所有修改将被撤销。")) {
+      return;
+    }
     setLoading(true);
-    try {
-      await resumeExecution();
-    } finally {
-      setLoading(false);
-    }
+    await discardChanges();
+    setLoading(false);
   };
 
-  const statusTextMap: Record<string, string> = {
-    executing: t.status?.running || "Running",
-    paused: t.status?.paused || "Paused",
-    awaiting_review: t.status?.awaiting_review || "Awaiting review"
-  };
-  const statusText = statusTextMap[lock.status] || lock.status;
+  // 状态文本
+  const statusText = {
+    executing: "执行中",
+    awaiting_review: "待审核",
+    terminated: "已终止",
+    idle: "",
+  }[status] || status;
+
+  // 状态图标
+  const StatusIcon = {
+    executing: Play,
+    awaiting_review: AlertTriangle,
+    terminated: Square,
+    idle: Play,
+  }[status] || Play;
 
   return (
-    <div className="execution-status-bar">
-      <span className="status-indicator">
-        [{statusText}] {lock.activePlanId || "-"}
-      </span>
-      <div className="status-actions">
-        {lock.status === "executing" && (
+    <div className={`execution-status-bar status-${status}`}>
+      {/* 状态信息 */}
+      <div className="execution-status-info">
+        <span className={`execution-status-indicator ${status}`}>
+          <StatusIcon size={14} />
+        </span>
+        <span className="execution-status-text">{statusText}</span>
+        {execution.planId && (
+          <span className="execution-status-plan">
+            Plan: {execution.planId.slice(0, 12)}...
+          </span>
+        )}
+        {execution.task && (
+          <span className="execution-status-task" title={execution.task}>
+            {execution.task.length > 30 ? execution.task.slice(0, 30) + "..." : execution.task}
+          </span>
+        )}
+      </div>
+
+      {/* 操作按钮 */}
+      <div className="execution-status-actions">
+        {isExecuting && (
+          <button
+            type="button"
+            className="execution-btn terminate"
+            onClick={handleTerminate}
+            disabled={loading}
+            title="终止执行"
+          >
+            <Square size={14} />
+            {loading ? "终止中..." : "终止"}
+          </button>
+        )}
+
+        {isAwaitingReview && (
           <>
             <button
-              className="btn btn-warning"
-              onClick={handlePause}
-              disabled={loading}
               type="button"
+              className="execution-btn apply"
+              onClick={handleApply}
+              disabled={loading}
+              title="应用变更"
             >
-              {t.buttons?.pauseRun || "Pause"}
+              <Check size={14} />
+              {loading ? "处理中..." : "应用"}
             </button>
             <button
-              className="btn btn-danger"
-              onClick={handleCancel}
-              disabled={loading}
               type="button"
+              className="execution-btn discard"
+              onClick={handleDiscard}
+              disabled={loading}
+              title="丢弃变更"
             >
-              {loading ? "..." : t.buttons?.cancelRun || "Cancel run"}
+              <X size={14} />
+              丢弃
+            </button>
+            <button
+              type="button"
+              className="execution-btn terminate"
+              onClick={handleTerminate}
+              disabled={loading}
+              title="终止执行"
+            >
+              <Square size={14} />
+              终止
             </button>
           </>
         )}
-        {lock.status === "paused" && (
-          <>
-            <button
-              className="btn btn-primary"
-              onClick={handleResume}
-              disabled={loading}
-              type="button"
-            >
-              {t.buttons?.resumeRun || "Resume"}
-            </button>
-            <button
-              className="btn btn-danger"
-              onClick={handleCancel}
-              disabled={loading}
-              type="button"
-            >
-              {t.buttons?.cancelRun || "Cancel run"}
-            </button>
-          </>
-        )}
-        <button
-          className="btn btn-outline"
-          onClick={forceUnlockLocal}
-          type="button"
-          title={t.messages?.forceUnlockHint || "Only clears frontend state, backend tasks may still be running"}
-        >
-          {t.buttons?.forceUnlock || "Force Unlock"}
-        </button>
       </div>
     </div>
   );

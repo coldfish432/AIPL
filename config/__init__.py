@@ -1,65 +1,104 @@
+"""Global configuration constants and helpers for the CLI/engine integration."""
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import List, Optional
 
-from .settings import Settings, get_settings, reload_settings
+
+# ---------------------------------------------------------------------------
+# Command configuration
+# ---------------------------------------------------------------------------
+DEFAULT_ALLOWED_COMMANDS: List[str] = [
+    "python",
+    "pytest",
+    "mvn",
+    "gradle",
+    "npm",
+    "node",
+    "pnpm",
+    "yarn",
+]
+
+DEFAULT_DENY_COMMANDS: List[str] = []
+
+DEFAULT_COMMAND_TIMEOUT: int = 300
 
 
-def resolve_db_path(root: Path, env_key: str = "AIPL_DB_PATH") -> Path | None:
-    env_path = os.getenv(env_key)
+# ---------------------------------------------------------------------------
+# Workspace configuration
+# ---------------------------------------------------------------------------
+DEFAULT_DENY_WRITE: List[str] = [
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".venv",
+    "__pycache__",
+    "artifacts",
+    "runs",
+    "outputs",
+]
+
+DEFAULT_MAX_CONCURRENCY: int = 2
+
+
+# ---------------------------------------------------------------------------
+# Stale task configuration
+# ---------------------------------------------------------------------------
+DEFAULT_STALE_SECONDS: int = 3600
+DEFAULT_STALE_AUTO_RESET: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Strategy configuration helpers
+# ---------------------------------------------------------------------------
+def _env_bool(key: str, default: bool = False) -> bool:
+    """Return a boolean flag from the environment."""
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+_POLICY_MODE = os.getenv("AIPL_POLICY_MODE", "report-only").strip().lower()
+POLICY_ENFORCED: bool = _POLICY_MODE in {"enforce", "strict", "block"}
+
+
+# ---------------------------------------------------------------------------
+# Database lookup helpers
+# ---------------------------------------------------------------------------
+def resolve_db_path(root: Path) -> Optional[Path]:
+    """
+    Resolve the SQLite database path for the CLI process.
+
+    Java injects the path via `--db-path`, which the Python CLI copies into
+    the `AIPL_DB_PATH` environment variable. Modules that write to the
+    database must call this helper so they can locate the correct file.
+
+    Args:
+        root: Engine root directory (reserved for future use).
+    """
+    del root
+    env_path = os.getenv("AIPL_DB_PATH")
     if env_path:
-        return Path(env_path).expanduser()
-    config_path = root / "server" / "src" / "main" / "resources" / "application.yml"
-    db_path = None
-    if config_path.exists():
-        try:
-            for line in config_path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped.startswith("dbPath:"):
-                    db_path = stripped.split(":", 1)[1].strip().strip("\"'") or None
-                    break
-        except Exception:
-            db_path = None
-    if not db_path:
-        return root / "server" / "data" / "aipl.db"
-    path = Path(db_path)
-    if path.is_absolute():
+        path = Path(env_path)
+        if not path.is_absolute():
+            path = path.resolve()
         return path
-    server_root = root / "server"
-    candidate = server_root / path
-    if candidate.exists() or candidate.parent.exists():
-        return candidate
-    return root / path
-
-
-def _settings_snapshot() -> Settings:
-    return get_settings()
-
-
-DEFAULT_STALE_SECONDS = _settings_snapshot().policy.stale_seconds
-DEFAULT_STALE_AUTO_RESET = _settings_snapshot().policy.stale_auto_reset
-DEFAULT_ALLOWED_COMMANDS = _settings_snapshot().command.allowed_prefixes
-DEFAULT_DENY_COMMANDS = _settings_snapshot().command.denied_prefixes
-DEFAULT_COMMAND_TIMEOUT = _settings_snapshot().command.default_timeout
-DEFAULT_MAX_CONCURRENCY = _settings_snapshot().workspace.max_concurrency
-DEFAULT_DENY_WRITE = _settings_snapshot().workspace.deny_write
-DEFAULT_POLICY_MODE = _settings_snapshot().policy.mode
-POLICY_ENFORCED = _settings_snapshot().policy.is_enforced
+    return None
 
 
 __all__ = [
-    "Settings",
-    "get_settings",
-    "reload_settings",
-    "resolve_db_path",
-    "DEFAULT_STALE_SECONDS",
-    "DEFAULT_STALE_AUTO_RESET",
     "DEFAULT_ALLOWED_COMMANDS",
     "DEFAULT_DENY_COMMANDS",
     "DEFAULT_COMMAND_TIMEOUT",
-    "DEFAULT_MAX_CONCURRENCY",
     "DEFAULT_DENY_WRITE",
-    "DEFAULT_POLICY_MODE",
+    "DEFAULT_MAX_CONCURRENCY",
+    "DEFAULT_STALE_SECONDS",
+    "DEFAULT_STALE_AUTO_RESET",
     "POLICY_ENFORCED",
+    "resolve_db_path",
 ]

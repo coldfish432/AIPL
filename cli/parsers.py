@@ -17,6 +17,7 @@ from cli.commands import (
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIPL Engine CLI")
     parser.add_argument("--root", required=True, help="repo root path")
+    parser.add_argument("--db-path", help="SQLite database path (passed from Java)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_plan = sub.add_parser("plan")

@@ -16,11 +16,13 @@ import {
   Outlet,
   Route,
   Routes,
+  useNavigate,
 } from "react-router-dom";
 
 // Contexts
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { ExecutionProvider } from "@/contexts/ExecutionContext";
+import { ExecutionLockProvider } from "@/contexts/ExecutionLockContext";
 
 // Components
 import WorkspaceSelector from "@/components/WorkspaceSelector";
@@ -125,6 +127,22 @@ function AppLayout() {
   );
 }
 
+function DashboardWrapper() {
+  const navigate = useNavigate();
+
+  const handleSelectPlan = (planId: string) => {
+    navigate(`/plans/${planId}`);
+  };
+
+  const handleSelectRun = (runId: string, _planId?: string) => {
+    navigate(`/runs/${runId}`);
+  };
+
+  return (
+    <Dashboard onSelectPlan={handleSelectPlan} onSelectRun={handleSelectRun} />
+  );
+}
+
 // ============================================================
 // App
 // ============================================================
@@ -133,20 +151,22 @@ export default function App() {
   return (
     <HashRouter>
       <WorkspaceProvider>
-        <ExecutionProvider>
-          <Routes>
-            <Route path="/" element={<AppLayout />}>
-              <Route index element={<Navigate to="/dashboard" replace />} />
-              <Route path="dashboard" element={<Dashboard />} />
-              <Route path="pilot" element={<Pilot />} />
-              <Route path="runs/:runId" element={<RunDetail />} />
-              <Route path="plans/:planId" element={<PlanDetail />} />
-              <Route path="profile" element={<Profile />} />
-              <Route path="packages" element={<Packages />} />
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
-            </Route>
-          </Routes>
-        </ExecutionProvider>
+        <ExecutionLockProvider>
+          <ExecutionProvider>
+            <Routes>
+              <Route path="/" element={<AppLayout />}>
+                <Route index element={<Navigate to="/dashboard" replace />} />
+                <Route path="dashboard" element={<DashboardWrapper />} />
+                <Route path="pilot" element={<Pilot />} />
+                <Route path="runs/:runId" element={<RunDetail />} />
+                <Route path="plans/:planId" element={<PlanDetail />} />
+                <Route path="profile" element={<Profile />} />
+                <Route path="packages" element={<Packages />} />
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </Route>
+            </Routes>
+          </ExecutionProvider>
+        </ExecutionLockProvider>
       </WorkspaceProvider>
     </HashRouter>
   );

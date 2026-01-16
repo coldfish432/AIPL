@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Activity, CheckCircle, FileText, Play } from "lucide-react";
-import { listPlans, listRuns, PlanSummary, RunSummary } from "@/services/api";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, CheckCircle, FileText, Play, RefreshCw, Trash2 } from "lucide-react";
+import { deletePlan, listPlans, listRuns, PlanSummary, RunSummary } from "@/services/api";
 import { useI18n } from "@/hooks/useI18n";
 import { normalizeBackendStatus, getStatusDisplayText, UnifiedStatus } from "@/lib/status";
 import { STORAGE_KEYS } from "@/config/settings";
@@ -14,7 +14,11 @@ function formatTimestamp(value: unknown): string {
   if (!value) return "";
   let ts: number;
   if (typeof value === "number") {
-    ts = value > 9999999999 ? value : value * 1000;
+    if (value > 0 && value < 10000000000) {
+      ts = value * 1000;
+    } else {
+      ts = value;
+    }
   } else {
     ts = Date.parse(String(value));
   }
@@ -29,25 +33,33 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deletingPlanId, setDeletingPlanId] = useState<string | null>(null);
+  const pollingRef = useRef<number | null>(null);
+  const [isPolling, setIsPolling] = useState(true);
 
-  async function load() {
-    setLoading(true);
-    setError(null);
-    try {
-      const ws = workspace || undefined;
-      const [p, r] = await Promise.all([listPlans(ws), listRuns(ws)]);
-      setPlans(p);
-      setRuns(r);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t.messages.loadFailed);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const load = useCallback(
+    async (showLoading = true) => {
+      if (showLoading) setLoading(true);
+      setError(null);
+      try {
+        const ws = workspace || undefined;
+        const [p, r] = await Promise.all([listPlans(ws), listRuns(ws)]);
+        setPlans(p);
+        setRuns(r);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : t.messages.loadFailed);
+      } finally {
+        if (showLoading) {
+          setLoading(false);
+        }
+      }
+    },
+    [workspace, t.messages.loadFailed]
+  );
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [workspace, load]);
 
   useEffect(() => {
     const sync = () => setWorkspace(localStorage.getItem(STORAGE_KEYS.workspaceKey) || "");
@@ -56,8 +68,59 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
   }, []);
 
   useEffect(() => {
+    if (!isPolling) return;
+
+    const poll = () => {
+      void load(false);
+    };
+
+    pollingRef.current = window.setInterval(poll, 3000);
+
+    return () => {
+      if (pollingRef.current) {
+        window.clearInterval(pollingRef.current);
+      }
+    };
+  }, [isPolling, load]);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      setIsPolling(!document.hidden);
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
+  const handleDeletePlan = async (
+    e: React.MouseEvent<HTMLButtonElement>,
+    planId: string
+  ) => {
+    e.stopPropagation();
+
+    if (
+      !window.confirm(
+        "确定要删除此计划吗？这将同时删除所有关联的执行记录，此操作不可恢复。"
+      )
+    ) {
+      return;
+    }
+
+    setDeletingPlanId(planId);
+    setError(null);
+
+    try {
+      await deletePlan(planId);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除失败");
+    } finally {
+      setDeletingPlanId(null);
+    }
+  };
+
+  const handleRefresh = () => {
     void load();
-  }, [workspace]);
+  };
 
   const normalizedPlans = useMemo(
     () =>
@@ -123,7 +186,12 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
           </p>
         </div>
         <div className="dashboard-actions">
-          <button className="dashboard-primary" onClick={load} disabled={loading}>
+          {isPolling && (
+            <span className="dashboard-polling-indicator" title="实时刷新中">
+              <RefreshCw size={14} className="spin" />
+            </span>
+          )}
+          <button className="dashboard-primary" onClick={handleRefresh} disabled={loading}>
             {loading ? t.messages.loading : t.buttons.refresh}
           </button>
         </div>
@@ -181,17 +249,36 @@ export default function Dashboard({ onSelectRun, onSelectPlan }: Props) {
           <div className="dashboard-list dashboard-scroll-list">
             {normalizedPlans.length === 0 && <div className="dashboard-muted">{t.messages.noPlans}</div>}
             {normalizedPlans.map((plan) => (
-              <button key={plan.id} type="button" className="dashboard-list-item" onClick={() => onSelectPlan(plan.id)}>
-                <div className="dashboard-list-main">
-                  <div className="dashboard-list-title">{plan.inputTask || `${t.labels.plan} ${plan.id}`}</div>
-                  <div className="dashboard-list-meta">
-                    {t.labels.updated} {formatTimestamp(plan.updatedAt)}
+              <div key={plan.id} className="dashboard-list-item-wrapper">
+                <button
+                  type="button"
+                  className="dashboard-list-item"
+                  onClick={() => onSelectPlan(plan.id)}
+                >
+                  <div className="dashboard-list-main">
+                    <div className="dashboard-list-title">{plan.inputTask || `${t.labels.plan} ${plan.id}`}</div>
+                    <div className="dashboard-list-meta">
+                      {t.labels.updated} {formatTimestamp(plan.updatedAt)}
+                    </div>
                   </div>
-                </div>
-                <div className="dashboard-list-tail">
-                  <span className="dashboard-pill">{t.labels.tasks} {plan.tasksCount}</span>
-                </div>
-              </button>
+                  <div className="dashboard-list-tail">
+                    <span className="dashboard-pill">{t.labels.tasks} {plan.tasksCount}</span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="dashboard-delete-btn"
+                  onClick={(e) => handleDeletePlan(e, plan.id)}
+                  disabled={deletingPlanId === plan.id}
+                  title="删除计划"
+                >
+                  {deletingPlanId === plan.id ? (
+                    <RefreshCw size={14} className="spin" />
+                  ) : (
+                    <Trash2 size={14} />
+                  )}
+                </button>
+              </div>
             ))}
           </div>
         </div>

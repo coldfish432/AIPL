@@ -57,6 +57,29 @@ interface EventItem {
   detail?: string;
 }
 
+/**
+ * 标准化时间戳 —— 自动识别秒级时间并转换为毫秒
+ */
+function normalizeTimestamp(ts: unknown): number {
+  if (typeof ts === "number") {
+    if (ts > 0 && ts < 10000000000) {
+      return ts * 1000;
+    }
+    return ts;
+  }
+  if (typeof ts === "string") {
+    const parsed = Date.parse(ts);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+    const num = Number(ts);
+    if (!Number.isNaN(num) && num > 0) {
+      return num < 10000000000 ? num * 1000 : num;
+    }
+  }
+  return Date.now();
+}
+
 // ============================================================
 // Event Processing
 // ============================================================
@@ -64,7 +87,7 @@ interface EventItem {
 /**
  * 将后端事件转换为带前缀的显示格式
  */
-function processEvent(event: RunEvent, index: number): EventItem {
+function processEvent(event: RunEvent): EventItem {
   const type = event.type || event.event || event.name || "unknown";
   const normalizedType = type.toLowerCase().replace(/-/g, "_");
   
@@ -239,9 +262,14 @@ function processEvent(event: RunEvent, index: number): EventItem {
       level = "info";
   }
 
+  // 生成稳定的事件 ID（避免依赖外部索引）
+  const stableId =
+    event.event_id ||
+    `${normalizedType}-${event.ts || ""}-${event.step_id || event.step || ""}-${event.round ?? ""}-${event.task_id || ""}`;
+
   return {
-    id: `${event.event_id || index}-${event.ts || Date.now()}`,
-    timestamp: typeof event.ts === "number" ? event.ts : Date.parse(String(event.ts)) || Date.now(),
+    id: stableId,
+    timestamp: normalizeTimestamp(event.ts),
     type: normalizedType,
     prefix,
     message,
@@ -337,7 +365,7 @@ export default function RunDetail() {
       const data = await getRunEvents(runId, planId, 0, 500);
       const rawEvents = data.events || [];
       const processed = rawEvents
-        .map((e, i) => processEvent(e, i))
+        .map((e) => processEvent(e))
         .filter((e) => {
           if (seenEventIds.current.has(e.id)) return false;
           seenEventIds.current.add(e.id);
@@ -382,7 +410,7 @@ export default function RunDetail() {
       eventSourceRef.current.onmessage = (e) => {
         try {
           const event: RunEvent = JSON.parse(e.data);
-          const processed = processEvent(event, Date.now());
+          const processed = processEvent(event);
           
           if (!seenEventIds.current.has(processed.id)) {
             seenEventIds.current.add(processed.id);

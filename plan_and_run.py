@@ -121,10 +121,16 @@ def _write_plan_snapshot(root: Path, workspace: str | Path | None, plan_id: str,
 
 
 # 运行codex计划，执行外部命令
-def run_codex_plan(prompt: str, root_dir: Path) -> str:
+def run_codex_plan(prompt: str, root_dir: Path, workspace: Path | None = None) -> str:
     schema_path = root_dir / "schemas" / "plan.schema.json"
     io_root = root_dir / ".tmp_custom" / "codex_io"
-    return run_codex_with_files(prompt, root_dir, schema_path, io_dir=io_root)
+    return run_codex_with_files(
+        prompt,
+        root_dir,
+        schema_path,
+        io_dir=io_root,
+        work_dir=workspace,
+    )
 
 
 # 判断是否包含todo
@@ -329,7 +335,7 @@ def main():
         capabilities_block=capabilities_block,
     )
 
-    raw_plan = run_codex_plan(prompt.strip(), root)
+    raw_plan = run_codex_plan(prompt.strip(), root, workspace=workspace_path)
     plan_obj = json.loads(raw_plan)
     task_chain_text = plan_obj.get("task_chain_text")
     if not isinstance(task_chain_text, str) or not task_chain_text.strip():

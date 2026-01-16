@@ -29,6 +29,9 @@ import {
 
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useExecution } from "@/contexts/ExecutionContext";
+import { useExecutionLock } from "@/contexts/ExecutionLockContext";
+import TaskBriefing from "@/components/TaskBriefing";
+import type { ExecutionContext as LockExecutionContext } from "@/types/lock";
 import { useI18n } from "@/hooks/useI18n";
 import {
   assistantChat,
@@ -116,6 +119,31 @@ function saveSessions(workspace: string, sessions: Session[]): void {
   localStorage.setItem(getSessionsKey(workspace), JSON.stringify(sessions));
 }
 
+const STATUS_DESCRIPTIONS: Record<string, string> = {
+  planning: "正在生成任务计划",
+  confirming: "有待确认的任务计划",
+  running: "正在执行任务",
+  reviewing: "任务已完成，等待审查",
+};
+
+function buildMessagesWithContext(
+  messages: ChatMessage[],
+  ctx: LockExecutionContext
+): ChatMessage[] {
+  if (!ctx.hasActiveExecution) return messages;
+
+  const prompt = `[系统提示] 当前有活跃任务：
+- 状态: ${STATUS_DESCRIPTIONS[ctx.executionStatus] || ctx.executionStatus}
+- 任务: ${ctx.currentTask || "未知"}
+- Plan ID: ${ctx.planId || "未知"}${
+    ctx.runId ? `\n- Run ID: ${ctx.runId}` : ""
+  }
+
+用户可能在执行任务时提出问题，若需启动新任务请先完成当前任务。`;
+
+  return [{ role: "system" as const, content: prompt }, ...messages];
+}
+
 // ============================================================
 // Component
 // ============================================================
@@ -125,6 +153,24 @@ export default function Pilot() {
   const navigate = useNavigate();
   const { workspace } = useWorkspace();
   const { startExecution } = useExecution();
+  const {
+    executionLock,
+    canStartNewPlan,
+    canChat,
+    executionContext,
+    isRecovering,
+    lockForPlanning,
+    updatePlanId,
+    transitionToConfirming,
+    transitionToRunning,
+    releaseExecutionLock,
+    forceUnlockExecution,
+    startChatRequest,
+    finishChatRequest,
+    setPendingPlanRequest,
+    setPendingConfirmRequest,
+    clearPendingRequest,
+  } = useExecutionLock();
 
   // 会话状态
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -152,7 +198,7 @@ export default function Pilot() {
   // 滚动到底部
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
+  }, [releaseExecutionLock, clearPendingRequest]);
 
   useEffect(() => {
     scrollToBottom();
@@ -248,7 +294,7 @@ export default function Pilot() {
 
   // 发送消息
   const sendMessage = useCallback(async () => {
-    if (!input.trim() || !workspace || loading) return;
+    if (!input.trim() || !workspace || !canChat) return;
 
     const userMessage: Message = {
       id: `msg_${Date.now()}`,
@@ -262,15 +308,17 @@ export default function Pilot() {
     setLoading(true);
     setError(null);
 
+    const requestId = startChatRequest();
+
     try {
-      // 构建消息历史
-      const chatMessages: ChatMessage[] = [
+      const baseMessages: ChatMessage[] = [
         ...messages.map((m) => ({ role: m.role, content: m.content })),
         { role: "user" as const, content: userMessage.content },
       ];
 
-      // 调用 AI
-      const response = await assistantChat(chatMessages, workspace) as {
+      const chatMessages = buildMessagesWithContext(baseMessages, executionContext);
+
+      const response = (await assistantChat(chatMessages, workspace)) as {
         reply?: string;
         message?: string;
         intent?: string;
@@ -298,64 +346,88 @@ export default function Pilot() {
 
       setMessages((prev) => [...prev, assistantMessage]);
 
-      // 如果检测到任务意图
-      if (intent === "task" && taskSummary) {
+      if (intent === "task" && taskSummary && !executionContext.hasActiveExecution) {
         setPendingTaskSummary(taskSummary);
         setPendingTaskFiles(taskFiles);
         setPendingTaskOperations(taskOperations);
         setMode("task_detected");
       }
 
-      // 更新会话标题（使用第一条用户消息）
       if (messages.length === 0) {
         setSessions((prev) =>
           prev.map((s) =>
             s.id === currentSessionId
-              ? { ...s, title: userMessage.content.slice(0, 30) + (userMessage.content.length > 30 ? "..." : "") }
+              ? {
+                  ...s,
+                  title:
+                    userMessage.content.length > 30
+                      ? `${userMessage.content.slice(0, 30)}...`
+                      : userMessage.content,
+                }
               : s
           )
         );
       }
+
+      finishChatRequest(requestId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "发送失败");
+      const errorMessage = err instanceof Error ? err.message : "发送失败";
+      finishChatRequest(requestId, errorMessage);
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
-  }, [input, workspace, loading, messages, currentSessionId]);
+  }, [
+    input,
+    workspace,
+    messages,
+    currentSessionId,
+    canChat,
+    executionContext,
+    startChatRequest,
+    finishChatRequest,
+  ]);
+
 
   // 开始规划
   const startPlanning = useCallback(async () => {
     if (!workspace) return;
+    if (!canStartNewPlan.allowed) {
+      setError(canStartNewPlan.reason || "当前无法创建新任务");
+      return;
+    }
+
+    const tempPlanId = "pending";
+    lockForPlanning(tempPlanId, pendingTaskSummary || "");
+    setPendingPlanRequest(tempPlanId, pendingTaskSummary || "");
 
     setMode("planning");
     setLoading(true);
     setError(null);
 
     try {
-      const chatMessages: ChatMessage[] = messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      const chatMessages: ChatMessage[] = buildMessagesWithContext(
+        messages.map((m) => ({ role: m.role, content: m.content })),
+        executionContext
+      );
 
       const response = await assistantPlan(chatMessages, workspace);
-
-      const planId = response.plan_id || response.planId;
+      const planIdFromResponse = response.plan_id || response.planId;
       const taskChainText = response.task_chain_text || "";
       const tasksCount = response.tasks_count || 0;
 
-      if (planId) {
-        setGeneratedPlanId(planId);
+      if (planIdFromResponse) {
+        updatePlanId(planIdFromResponse);
+        setGeneratedPlanId(planIdFromResponse);
 
-        // 构建任务计划对象
         setTaskPlan({
           summary: pendingTaskSummary || "任务计划",
-          tasks: [],  // 从后端获取详细任务列表
+          tasks: [],
           taskChainText,
         });
 
         setMode("preview");
 
-        // 添加系统消息
         const planMessage: Message = {
           id: `msg_${Date.now()}_plan`,
           role: "assistant",
@@ -364,14 +436,32 @@ export default function Pilot() {
         };
 
         setMessages((prev) => [...prev, planMessage]);
+        transitionToConfirming();
+        clearPendingRequest();
+      } else {
+        throw new Error("未返回 plan_id");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "规划失败");
+      releaseExecutionLock();
+      clearPendingRequest();
       setMode("chat");
     } finally {
       setLoading(false);
     }
-  }, [workspace, messages, pendingTaskSummary]);
+  }, [
+    workspace,
+    messages,
+    pendingTaskSummary,
+    canStartNewPlan,
+    lockForPlanning,
+    updatePlanId,
+    setPendingPlanRequest,
+    executionContext,
+    transitionToConfirming,
+    clearPendingRequest,
+    releaseExecutionLock,
+  ]);
 
   // 取消任务
   const cancelTask = useCallback(() => {
@@ -381,6 +471,9 @@ export default function Pilot() {
     setPendingTaskOperations([]);
     setTaskPlan(null);
     setGeneratedPlanId(null);
+
+    releaseExecutionLock();
+    clearPendingRequest();
 
     const cancelMessage: Message = {
       id: `msg_${Date.now()}_cancel`,
@@ -396,6 +489,7 @@ export default function Pilot() {
   const confirmExecution = useCallback(async () => {
     if (!workspace || !generatedPlanId) return;
 
+    setPendingConfirmRequest(generatedPlanId);
     setMode("confirming");
     setLoading(true);
     setError(null);
@@ -405,14 +499,15 @@ export default function Pilot() {
       const runId = response.run_id || response.runId;
 
       if (runId) {
-        // 更新执行状态
+        transitionToRunning(runId);
+        clearPendingRequest();
+
         if (startExecution) {
           startExecution(generatedPlanId, runId);
         }
 
         setMode("executing");
 
-        // 添加执行消息
         const execMessage: Message = {
           id: `msg_${Date.now()}_exec`,
           role: "assistant",
@@ -422,7 +517,6 @@ export default function Pilot() {
 
         setMessages((prev) => [...prev, execMessage]);
 
-        // 跳转到执行详情
         setTimeout(() => {
           navigate(`/runs/${encodeURIComponent(runId)}?planId=${encodeURIComponent(generatedPlanId)}`);
         }, 1500);
@@ -433,7 +527,15 @@ export default function Pilot() {
     } finally {
       setLoading(false);
     }
-  }, [workspace, generatedPlanId, startExecution, navigate]);
+  }, [
+    workspace,
+    generatedPlanId,
+    startExecution,
+    navigate,
+    transitionToRunning,
+    setPendingConfirmRequest,
+    clearPendingRequest,
+  ]);
 
   // 手动触发规划（提议按钮）
   const handlePropose = useCallback(() => {
@@ -537,6 +639,9 @@ export default function Pilot() {
             </span>
           )}
         </div>
+
+        {/* 任务简报 */}
+        <TaskBriefing executionLock={executionLock} onForceUnlock={forceUnlockExecution} />
 
         {/* 消息列表 */}
         <div className="pilot-messages">

@@ -22,6 +22,7 @@ import {
   Loader2,
   AlertTriangle,
   List,
+  Trash2,
 } from "lucide-react";
 
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -31,6 +32,7 @@ import {
   getPlan,
   reworkPlan,
   startRun,
+  deletePlan,
   listRuns,
   PlanDetailResponse,
   PlanTask,
@@ -190,6 +192,29 @@ export default function PlanDetail() {
     navigate("/dashboard");
   };
 
+  const handleDeletePlan = async () => {
+    if (!planId) return;
+
+    if (
+      !window.confirm(
+        "确定要删除此计划吗？这将同时删除所有关联的执行记录，此操作不可恢复。"
+      )
+    ) {
+      return;
+    }
+
+    setActionLoading(true);
+    setError(null);
+
+    try {
+      await deletePlan(planId);
+      navigate("/dashboard");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除失败");
+      setActionLoading(false);
+    }
+  };
+
   // 跳转到 run
   const handleRunClick = (run: RunSummary) => {
     const runId = getRunId(run);
@@ -283,6 +308,16 @@ export default function PlanDetail() {
         >
           <RotateCcw size={16} />
           返工
+        </button>
+        <button
+          type="button"
+          className="plan-action-btn danger"
+          onClick={handleDeletePlan}
+          disabled={actionLoading}
+          title="删除此计划和所有关联的执行记录"
+        >
+          <Trash2 size={16} />
+          删除计划
         </button>
       </div>
 

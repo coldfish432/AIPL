@@ -223,6 +223,67 @@
   overflow-y: auto;
 }
 
+.dashboard-list-item-wrapper {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.dashboard-list-item-wrapper .dashboard-list-item {
+  flex: 1;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.dashboard-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  background: transparent;
+  border: 1px solid var(--color-border, #333);
+  border-left: none;
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+  color: var(--color-text-muted, #888);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dashboard-delete-btn:hover:not(:disabled) {
+  background: var(--color-error, #ef4444);
+  border-color: var(--color-error, #ef4444);
+  color: white;
+}
+
+.dashboard-delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dashboard-polling-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--color-primary, #3b82f6);
+  margin-right: 8px;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .dashboard-empty {
   padding: 2rem;
   text-align: center;
@@ -1070,6 +1131,12 @@
   color: var(--text-tertiary);
 }
 
+.timeline-time {
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', monospace;
+  font-size: 12px;
+  color: var(--color-text-muted, #888);
+}
+
 /* ============================================================
    Plan Detail Page
    ============================================================ */
@@ -1220,6 +1287,30 @@
 .plan-action-btn.secondary:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.plan-action-btn.danger {
+  background: transparent;
+  border: 1px solid var(--color-error, #ef4444);
+  color: var(--color-error, #ef4444);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 14px;
+}
+
+.plan-action-btn.danger:hover:not(:disabled) {
+  background: var(--color-error, #ef4444);
+  color: white;
+}
+
+.plan-action-btn.danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Stats */

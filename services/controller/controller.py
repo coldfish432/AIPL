@@ -16,6 +16,8 @@ from services.stage_workspace import StageWorkspaceManager
 from state import append_state_events, transition_task
 
 from .backlog import load_backlog_map_filtered
+from engine.diagnosis import DiagnosisReporter
+from engine.learning import LearningCollector, LearningGC
 from .policy import is_high_risk, load_policy, merge_checks
 from .reporting import extract_paths_from_checks, extract_paths_from_reasons, write_verification_report
 from sqlite_mirror import mirror_run, update_run_status
@@ -26,28 +28,11 @@ from workspace_utils import find_plan_workspace, get_backlog_dir, get_plan_dir
 __all__ = ["TaskController"]
 
 
-def _load_code_graph(root: Path, plan_id: str | None, code_graph_service: ICodeGraphService):
-    if not plan_id:
-        return None
-    workspace = find_plan_workspace(root, plan_id)
-    plan_dir = get_plan_dir(root, workspace, plan_id)
-    plan_path = plan_dir / "plan.json"
-    graph_path = None
-    if plan_path.exists():
-        try:
-            plan = json.loads(plan_path.read_text(encoding="utf-8"))
-            graph_path = plan.get("code_graph_path")
-        except Exception:
-            graph_path = None
-    if not graph_path:
-        graph_path = plan_dir / "code-graph.json"
-    graph_path = Path(graph_path)
-    if not graph_path.exists():
-        return None
-    try:
-        return code_graph_service.load(graph_path)
-    except Exception:
-        return None
+def _collect_graph_seeds(reasons: list[dict], checks: list[dict]) -> list[str]:
+    seeds = []
+    seeds.extend(extract_paths_from_reasons(reasons))
+    seeds.extend(extract_paths_from_checks(checks))
+    return [s for s in seeds if s]
 
 
 def _write_meta(meta_path: Path, updates: dict) -> dict:
@@ -98,6 +83,7 @@ class TaskController:
         self._profile_service = profile_service
         self._verifier = verifier
         self._code_graph_service = code_graph_service
+        self._gc_counters: dict[str, int] = {}
 
     def run(self, args: argparse.Namespace) -> None:
         root = self._root
@@ -223,6 +209,9 @@ class TaskController:
         final_reasons = []
         last_step_id = None
         max_rounds = max(args.max_rounds, 1)
+        diagnosis_reporter = DiagnosisReporter(root)
+        last_failure_context: dict | None = None
+        last_failure_round = 0
 
         while task:
             # ========== 新增：取消检测 ==========
@@ -380,15 +369,20 @@ class TaskController:
                         except Exception:
                             validation_reasons = []
                     suspected_related_files = []
-                    graph = _load_code_graph(root, plan_id, self._code_graph_service)
-                    if graph:
-                        seeds = []
-                        seeds.extend(extract_paths_from_reasons(reasons))
-                        seeds.extend(extract_paths_from_checks(task.get("checks", [])))
-                        normalized = [graph.normalize_path(p) for p in seeds]
-                        normalized = [p for p in normalized if p]
-                        if normalized:
-                            suspected_related_files = graph.related_files(normalized, max_hops=2)
+                    missing_suggestions = []
+                    if workspace_path:
+                        workspace_dir = Path(workspace_path)
+                        seeds = _collect_graph_seeds(reasons, task.get("checks", []))
+                        related = self._code_graph_service.get_related_files(
+                            workspace_dir, seeds, include_co_changes=True
+                        )
+                        suspected_related_files = [item["file"] for item in related]
+                        modified_files = shape.get("produced", []) if isinstance(shape, dict) else []
+                        missing_suggestions = self._code_graph_service.suggest_missing_files(
+                            workspace_dir,
+                            modified_files=modified_files,
+                            min_confidence=0.3,
+                        )
                     rework = self._verifier.collect_errors_for_retry(
                         run_dir=run_dir,
                         round_id=round_id,
@@ -400,9 +394,26 @@ class TaskController:
                         suspected_related_files=suspected_related_files,
                     )
                     payload = rework.to_dict() if hasattr(rework, "to_dict") else rework
+                    if missing_suggestions:
+                        payload["missing_suggestions"] = missing_suggestions
                     if validation_reasons:
                         payload["validation_reasons"] = validation_reasons
                     write_json(round_dir / "rework_request.json", payload)
+                    last_failure_context = payload
+                    last_failure_round = round_id
+                if not passed and last_failure_context is None:
+                    summary = "; ".join(
+                        str(r.get("reason") or r.get("type") or "") for r in reasons
+                    ).strip()
+                    last_failure_context = {
+                        "round": round_id,
+                        "why_failed": reasons,
+                        "error_summary": summary or "verification failed",
+                        "fix_guidance": "",
+                        "execution_errors": {"failed_commands": []},
+                        "produced_files": [],
+                    }
+                    last_failure_round = round_id
 
             if _check_canceled(run_dir):
                 passed_all = False
@@ -452,6 +463,24 @@ class TaskController:
             else:
                 break
 
+        if (
+            not passed_all
+            and last_failure_context
+            and not _check_canceled(run_dir)
+            and workspace_path
+        ):
+            try:
+                diag = diagnosis_reporter.generate(run_dir, task_id, last_failure_round, last_failure_context)
+            except Exception:
+                diag = None
+            if diag and workspace_path:
+                try:
+                    collector = LearningCollector(Path(workspace_path))
+                    collector.collect_from_diagnosis(diag, run_id, task_id)
+                    collector.store_all()
+                except Exception:
+                    pass
+
         index_lines = [
             f"# Run {run_id}",
             f"- Task: {last_step_id or '-'}",
@@ -494,6 +523,25 @@ class TaskController:
                     "changed_files_count": changed_count,
                 },
             )
+        recorded_modified_files: list[str] = []
+        if patchset and patchset.changed_files:
+            recorded_modified_files = [
+                entry.get("path")
+                for entry in patchset.changed_files
+                if isinstance(entry.get("path"), str)
+            ]
+        if (
+            recorded_modified_files
+            and workspace_path
+            and passed_all
+        ):
+            self._code_graph_service.record_change_set(
+                Path(workspace_path),
+                run_id,
+                task_id,
+                recorded_modified_files,
+                success=True,
+            )
         final_status = "failed"
         if _check_canceled(run_dir):
             final_status = "canceled"
@@ -518,6 +566,11 @@ class TaskController:
         if final_status in {"done", "failed", "canceled"}:
             cleanup_stage()
 
+        if workspace_path:
+            learned = self._code_graph_service.learn_from_execution(Path(workspace_path))
+            if learned:
+                print(f"[LEARN] Learned {len(learned)} new co-change patterns")
+
         try:
             meta_snapshot = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
@@ -535,5 +588,13 @@ class TaskController:
             status=final_status,
             task=meta_snapshot.get("task_title", "") or "",
         )
+
+        if workspace_path:
+            counter = self._gc_counters.get(workspace_path, 0) + 1
+            self._gc_counters[workspace_path] = counter
+            if counter >= 10:
+                stats = LearningGC(Path(workspace_path)).run()
+                print(f"[GC] Removed {stats['removed']}, decayed {stats['decayed']}")
+                self._gc_counters[workspace_path] = 0
 
         print(f"[DONE] run={run_dir} status={final_status}")

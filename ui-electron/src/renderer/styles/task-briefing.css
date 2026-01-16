@@ -1,0 +1,200 @@
+/* Task Briefing */
+.task-briefing {
+  background: var(--color-bg-secondary, #f9fafb);
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-left: 4px solid var(--color-primary, #3b82f6);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.task-briefing.status-planning {
+  border-left-color: #3b82f6;
+}
+
+.task-briefing.status-confirming {
+  border-left-color: #f59e0b;
+}
+
+.task-briefing.status-running {
+  border-left-color: #22c55e;
+}
+
+.task-briefing.status-reviewing {
+  border-left-color: #f59e0b;
+}
+
+.task-briefing-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+
+.task-briefing-header:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.task-briefing-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.task-briefing-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-briefing-time {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.task-briefing-meta svg {
+  color: #9ca3af;
+  transition: transform 0.2s;
+}
+
+.task-briefing-meta svg.rotated {
+  transform: rotate(90deg);
+}
+
+.task-briefing-content {
+  padding: 0 16px 16px;
+  border-top: 1px solid var(--color-border, #e5e7eb);
+}
+
+.task-briefing-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: #9ca3af;
+}
+
+.task-briefing-task {
+  margin: 12px 0;
+}
+
+.task-briefing-task p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1f2937;
+}
+
+.task-briefing-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.task-briefing-info-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 4px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.task-briefing-progress {
+  margin: 12px 0;
+}
+
+.task-briefing-progress-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.task-briefing-progress-title {
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.task-briefing-progress-bar {
+  height: 6px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.task-briefing-progress-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.task-briefing-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--color-border, #e5e7eb);
+}
+
+.task-briefing-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.task-briefing-btn.primary {
+  background: #3b82f6;
+  color: white;
+}
+
+.task-briefing-btn.primary:hover {
+  background: #2563eb;
+}
+
+.task-briefing-btn.secondary {
+  background: rgba(0, 0, 0, 0.06);
+  color: #1f2937;
+}
+
+.task-briefing-btn.secondary:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.task-briefing-btn.danger {
+  background: transparent;
+  color: #ef4444;
+  padding: 8px;
+}
+
+.task-briefing-btn.danger:hover {
+  background: #fef2f2;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

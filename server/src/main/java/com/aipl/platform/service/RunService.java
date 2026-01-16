@@ -82,6 +82,14 @@ public class RunService {
         return engine.rework(resolvePlanId(planId, runId), runId, stepId, feedback, scope);
     }
 
+    public JsonNode reworkPlan(String planId) throws Exception {
+        String runId = runRepository.findLatestRunIdByPlan(planId);
+        if (runId == null || runId.isBlank()) {
+            throw new IllegalStateException("No run found for plan " + planId);
+        }
+        return rework(planId, runId, null, null, null);
+    }
+
     public JsonNode retry(String planId, String runId, boolean force, boolean retryDeps, String retryIdSuffix, boolean reuseTaskId) throws Exception {
         return engine.retry(resolvePlanId(planId, runId), runId, force, retryDeps, retryIdSuffix, reuseTaskId);
     }

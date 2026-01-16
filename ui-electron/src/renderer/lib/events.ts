@@ -149,13 +149,28 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
  */
 export function getEventTimestamp(event: RunEvent): number {
   const ts = event.ts ?? event.time ?? event.timestamp ?? event.created_at;
-  
-  if (typeof ts === "number") return ts;
+
+  if (typeof ts === "number") {
+    if (ts > 0 && ts < 10000000000) {
+      return ts * 1000;
+    }
+    return ts;
+  }
+
   if (typeof ts === "string") {
     const parsed = Date.parse(ts);
-    return Number.isNaN(parsed) ? 0 : parsed;
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+    const num = Number(ts);
+    if (!Number.isNaN(num)) {
+      if (num > 0 && num < 10000000000) {
+        return num * 1000;
+      }
+      return num;
+    }
   }
-  
+
   return 0;
 }
 

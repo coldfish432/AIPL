@@ -121,4 +121,24 @@ public class RunRepository {
             }
         }
     }
+
+    public String findLatestRunIdByPlan(String planId) throws Exception {
+        if (planId == null || planId.isBlank() || dbPath == null) return null;
+
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            ensureSchema(conn);
+            try (PreparedStatement stmt = conn.prepareStatement(
+                "SELECT run_id FROM runs WHERE plan_id=? ORDER BY updated_at DESC LIMIT 1"
+            )) {
+                stmt.setString(1, planId);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getString("run_id");
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
 }

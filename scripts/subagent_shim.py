@@ -26,7 +26,8 @@ from infra.path_guard import is_workspace_unsafe
 from policy_validator import validate_writes, validate_commands, default_path_rules
 from services.profile_service import ensure_profile, DEFAULT_ALLOWED_COMMANDS, DEFAULT_COMMAND_TIMEOUT, DEFAULT_DENY_WRITE
 from config import POLICY_ENFORCED
-from services.code_graph_service import CodeGraph
+from services.code_graph_service import CodeGraphService
+from engine.learning.storage import LearningStorage
 
 
 def run_codex(prompt: str, root_dir: Path, run_dir: Path, round_dir: Path) -> str:
@@ -117,58 +118,54 @@ def _extract_paths_from_checks(checks: list[dict]) -> list[str]:
     return paths
 
 
-# 加载代码图，解析JSON，检查路径是否存在
-def _load_code_graph(root: Path, run_dir: Path) -> CodeGraph | None:
-    meta_path = run_dir / "meta.json"
-    if not meta_path.exists():
-        return None
-    try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    plan_id = meta.get("plan_id")
-    if not plan_id:
-        return None
-    plan_path = root / "artifacts" / "executions" / plan_id / "plan.json"
-    graph_path = None
-    if plan_path.exists():
-        try:
-            plan = json.loads(plan_path.read_text(encoding="utf-8"))
-            graph_path = plan.get("code_graph_path")
-        except Exception:
-            graph_path = None
-    if not graph_path:
-        graph_path = root / "artifacts" / "executions" / plan_id / "code-graph.json"
-    graph_path = Path(graph_path)
-    if not graph_path.exists():
-        return None
-    try:
-        return CodeGraph.load(graph_path)
-    except Exception:
-        return None
+def _collect_graph_seeds(checks: list[dict], rework: dict | None) -> list[str]:
+    seeds: list[str] = []
+    seeds.extend(_extract_paths_from_checks(checks))
+    if not rework:
+        return [s for s in seeds if s]
+    if isinstance(rework.get("why_failed"), list):
+        seeds.extend(_extract_paths_from_reasons(rework.get("why_failed", [])))
+    suspected = rework.get("suspected_related_files")
+    if isinstance(suspected, list):
+        for item in suspected:
+            if isinstance(item, str) and item.strip():
+                seeds.append(item.strip())
+    return [s for s in seeds if s]
 
 
-# 读取文件内容，检查路径是否存在
-def _summarize_related_files(graph: CodeGraph, seed_paths: list[str], max_files: int = 20, max_lines: int = 200) -> str:
-    related = graph.related_files(seed_paths, max_hops=2)
+def _format_related_files(related: list[dict]) -> str:
     if not related:
-        return "none"
-    blocks = []
-    count = 0
-    for rel_path in related:
-        if count >= max_files:
-            break
-        abs_path = graph.workspace_root / rel_path
-        if not abs_path.exists() or not abs_path.is_file():
+        return "- (none)"
+    lines = []
+    for item in related:
+        file_path = item.get("file")
+        if not file_path:
             continue
-        try:
-            text = abs_path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
+        relation = item.get("relation", "related")
+        confidence = item.get("confidence")
+        if isinstance(confidence, (int, float)):
+            lines.append(f"- {file_path} ({relation}, confidence: {confidence:.2f})")
+        else:
+            lines.append(f"- {file_path} ({relation})")
+    return "\n".join(lines) if lines else "- (none)"
+
+
+def _format_missing_suggestions(suggestions: list[dict]) -> str:
+    if not suggestions:
+        return "- (none)"
+    lines = []
+    for item in suggestions:
+        file_path = item.get("file")
+        if not file_path:
             continue
-        snippet = "\n".join(text.splitlines()[:max_lines])
-        blocks.append(f"[file] {rel_path}\n{snippet}")
-        count += 1
-    return "\n\n".join(blocks) if blocks else "none"
+        confidence = item.get("confidence")
+        reason = item.get("reason", "co_change")
+        if isinstance(confidence, (int, float)):
+            lines.append(f"- {file_path} (confidence: {confidence:.2f}, reason: {reason})")
+        else:
+            lines.append(f"- {file_path} (reason: {reason})")
+    return "\n".join(lines) if lines else "- (none)"
+
 
 
 # 读取outputs目录下的文件内容
@@ -353,6 +350,7 @@ def main():
     workspace_main_path = workspace_main_path.resolve()
     if is_workspace_unsafe(root, workspace_main_path):
         raise RuntimeError(f"workspace path {workspace_main_path} includes engine root {root}")
+    graph_service = CodeGraphService(cache_root=root)
     allow_write = []
     deny_write = list(DEFAULT_DENY_WRITE)
     allowed_commands = list(DEFAULT_ALLOWED_COMMANDS)
@@ -408,20 +406,30 @@ def main():
     snap = snapshot_outputs(outputs_dir)
     acceptance_block = "\n".join("- " + c for c in acceptance) if acceptance else "- (none provided)"
     checks_block = json.dumps(checks, ensure_ascii=False, indent=2) if checks else "[]"
-    tmpl = (root / "prompts" / "subagent_fix.txt").read_text(encoding="utf-8")
-    related_files_block = "none"
-    graph = _load_code_graph(root, run_dir)
-    if graph:
-        seed_paths = []
-        seed_paths.extend(_extract_paths_from_checks(checks))
-        if rework and isinstance(rework.get("why_failed"), list):
-            seed_paths.extend(_extract_paths_from_reasons(rework.get("why_failed", [])))
-        if rework and isinstance(rework.get("suspected_related_files"), list):
-            seed_paths.extend([p for p in rework.get("suspected_related_files", []) if isinstance(p, str)])
-        normalized = [graph.normalize_path(p) for p in seed_paths]
-        normalized = [p for p in normalized if p]
-        if normalized:
-            related_files_block = _summarize_related_files(graph, normalized)
+    tmpl = (root / "prompts" / "fix.txt").read_text(encoding="utf-8")
+    workspace_dir = Path(workspace_path)
+    related_items: list[dict] = []
+    missing_items: list[dict] = []
+    if workspace_path:
+        seeds = _collect_graph_seeds(checks, rework)
+        related_items = graph_service.get_related_files(
+            workspace_dir,
+            seeds,
+            include_co_changes=True,
+        )
+        modified_files: list[str] = []
+        if rework and isinstance(rework.get("produced_files"), list):
+            modified_files = [p for p in rework["produced_files"] if isinstance(p, str)]
+        if rework and isinstance(rework.get("missing_suggestions"), list):
+            missing_items = rework["missing_suggestions"]
+        else:
+            missing_items = graph_service.suggest_missing_files(
+                workspace_dir,
+                modified_files=modified_files,
+                min_confidence=0.7,
+            )
+    related_files_block = _format_related_files(related_items)
+    missing_suggestions_block = _format_missing_suggestions(missing_items)
     hard_block = json.dumps(
         {
             "allow_write": allow_write,
@@ -434,17 +442,57 @@ def main():
         ensure_ascii=False,
         indent=2,
     )
+    policy_data = {}
+    policy_path = run_dir / "policy.json"
+    if policy_path.exists():
+        try:
+            policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
+        except Exception:
+            policy_data = {}
+    rules = policy_data.get("workspace_rules", [])
+    rule_sources = policy_data.get("workspace_rule_sources", {})
+    if rules:
+        rules_block = "\n".join(
+            f"- {rule} ({rule_sources.get(rule, 'workspace')})" for rule in rules
+        )
+    else:
+        rules_block = "- (none provided)"
+    storage_hints = []
+    storage_lessons = []
+    if workspace_path and Path(workspace_path).exists():
+        storage = LearningStorage(Path(workspace_path))
+        storage_hints = storage.get_hints(scope="fix")
+        storage_lessons = storage.get_lessons(limit=5)
+    hints_block = (
+        "\n".join(
+            f"- {h.get('hint')} (trigger: {h.get('trigger_signature')})"
+            for h in storage_hints
+        )
+        if storage_hints
+        else "- (none yet)"
+    )
+    lessons_block = (
+        "\n".join(f"- {l.get('content')}" for l in storage_lessons if l.get("content"))
+        if storage_lessons
+        else "- (none yet)"
+    )
     prompt = tmpl.format(
         task_id=task_id,
         run_name=run_dir.name,
+        round_id=round_id,
+        workspace=str(workspace_path),
+        mode=mode,
+        hard_block=hard_block,
+        rules_block=rules_block,
+        hints_block=hints_block,
+        lessons_block=lessons_block,
+        related_files_block=related_files_block,
+        missing_suggestions_block=missing_suggestions_block,
         acceptance_block=acceptance_block,
         checks_block=checks_block,
         why_failed=why_failed,
         prev_stdout=prev_stdout,
         snap_json=json.dumps(snap, ensure_ascii=False),
-        related_files_block=related_files_block,
-        workspace=str(workspace_path),
-        hard_block=hard_block,
     )
 
     raw = run_codex(prompt, root, run_dir, round_dir).strip()

@@ -16,13 +16,19 @@ import java.util.List;
 public class EngineClient {
     private final ObjectMapper mapper = new ObjectMapper();
     private final Path engineRoot;
+    private final String dbPath;
 
-    public EngineClient(@Value("${app.engineRoot}") String engineRoot) {
+    public EngineClient(
+            @Value("${app.engineRoot}") String engineRoot,
+            @Value("${app.dbPath}") String dbPath
+    ) {
         this.engineRoot = Path.of(engineRoot).toAbsolutePath().normalize();
+        this.dbPath = Path.of(dbPath).toAbsolutePath().toString();
     }
 
     public JsonNode run(String task, String planId, String workspace, String mode) throws Exception {
         List<String> cmd = new EngineCommandBuilder("run", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--task", task)
                 .arg("--plan-id", planId)
                 .arg("--workspace", workspace)
@@ -33,6 +39,7 @@ public class EngineClient {
 
     public JsonNode plan(String task, String planId, String workspace) throws Exception {
         List<String> cmd = new EngineCommandBuilder("plan", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--task", task)
                 .arg("--plan-id", planId)
                 .arg("--workspace", workspace)
@@ -43,6 +50,7 @@ public class EngineClient {
 
     public JsonNode runPlan(String planId, String workspace, String mode) throws Exception {
         List<String> cmd = new EngineCommandBuilder("run-plan", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--workspace", workspace)
                 .arg("--mode", mode)
@@ -52,6 +60,7 @@ public class EngineClient {
 
     public JsonNode status(String planId, String runId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("status", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .build();
@@ -60,6 +69,7 @@ public class EngineClient {
 
     public JsonNode events(String planId, String runId, int cursor, int limit) throws Exception {
         List<String> cmd = new EngineCommandBuilder("events", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .arg("--cursor", String.valueOf(cursor))
@@ -70,6 +80,7 @@ public class EngineClient {
 
     public JsonNode artifacts(String planId, String runId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("artifacts", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .build();
@@ -78,6 +89,7 @@ public class EngineClient {
 
     public JsonNode cancel(String planId, String runId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("cancel", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .build();
@@ -86,6 +98,7 @@ public class EngineClient {
 
     public JsonNode pause(String planId, String runId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("pause", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .build();
@@ -94,6 +107,7 @@ public class EngineClient {
 
     public JsonNode resume(String planId, String runId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("resume", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .build();
@@ -102,6 +116,7 @@ public class EngineClient {
 
     public JsonNode cancelPlanRuns(String planId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("cancel-plan-runs", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .build();
         return exec(cmd);
@@ -109,6 +124,7 @@ public class EngineClient {
 
     public JsonNode apply(String planId, String runId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("apply", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .build();
@@ -117,6 +133,7 @@ public class EngineClient {
 
     public JsonNode discard(String planId, String runId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("discard", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .build();
@@ -126,6 +143,7 @@ public class EngineClient {
 
     public JsonNode rework(String planId, String runId, String stepId, String feedback, String scope) throws Exception {
         List<String> cmd = new EngineCommandBuilder("rework", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .arg("--step-id", stepId)
@@ -137,6 +155,7 @@ public class EngineClient {
 
     public JsonNode retry(String planId, String runId, boolean force, boolean retryDeps, String retryIdSuffix, boolean reuseTaskId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("retry", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--plan-id", planId)
                 .arg("--run-id", runId)
                 .flag("--force", force)
@@ -149,6 +168,7 @@ public class EngineClient {
 
     public JsonNode profile(String action, String workspace) throws Exception {
         List<String> cmd = new EngineCommandBuilder("profile", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--action", action)
                 .arg("--workspace", workspace)
                 .build();
@@ -161,6 +181,7 @@ public class EngineClient {
                 mapper.createObjectNode().set("user_hard", userHard == null ? mapper.nullNode() : userHard)
         );
         List<String> cmd = new EngineCommandBuilder("profile", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--action", "update")
                 .arg("--workspace", workspace)
                 .arg("--payload", payloadPath.toString())
@@ -174,6 +195,7 @@ public class EngineClient {
         Path payloadPath = dir.resolve("assistant-chat-" + System.currentTimeMillis() + ".json");
         mapper.writeValue(payloadPath.toFile(), payload);
         List<String> cmd = new EngineCommandBuilder("assistant-chat", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--messages-file", payloadPath.toString())
                 .arg("--workspace", workspace)
                 .build();
@@ -200,6 +222,7 @@ public class EngineClient {
         Path payloadPath = payload != null ? writePayload("language-pack", payload) : null;
         String enabledValue = enabled != null ? (enabled ? "1" : "0") : null;
         List<String> cmd = new EngineCommandBuilder("language-packs", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--action", action)
                 .arg("--pack-id", packId)
                 .arg("--payload", payloadPath != null ? payloadPath.toString() : null)
@@ -213,6 +236,7 @@ public class EngineClient {
 
     public JsonNode memory(String workspaceId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("memory", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--workspace-id", workspaceId)
                 .build();
         return exec(cmd);
@@ -235,6 +259,7 @@ public class EngineClient {
         Path payloadPath = payload != null ? writePayload("experience-pack", payload) : null;
         String enabledValue = enabled != null ? (enabled ? "1" : "0") : null;
         List<String> cmd = new EngineCommandBuilder("experience-packs", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--action", action)
                 .arg("--workspace-id", workspaceId)
                 .arg("--pack-id", packId)
@@ -253,6 +278,7 @@ public class EngineClient {
 
     public JsonNode rules(String action, String workspaceId, String ruleId, String content, String scope, String category) throws Exception {
         List<String> cmd = new EngineCommandBuilder("rules", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--action", action)
                 .arg("--workspace-id", workspaceId)
                 .arg("--rule-id", ruleId)
@@ -266,6 +292,7 @@ public class EngineClient {
     public JsonNode checks(String action, String workspaceId, String checkId, JsonNode payload, String scope) throws Exception {
         Path payloadPath = payload != null ? writePayload("checks", payload) : null;
         List<String> cmd = new EngineCommandBuilder("checks", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--action", action)
                 .arg("--workspace-id", workspaceId)
                 .arg("--check-id", checkId)
@@ -277,6 +304,7 @@ public class EngineClient {
 
     public JsonNode lessons(String action, String workspaceId, String lessonId) throws Exception {
         List<String> cmd = new EngineCommandBuilder("lessons", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--action", action)
                 .arg("--workspace-id", workspaceId)
                 .arg("--lesson-id", lessonId)
@@ -286,6 +314,7 @@ public class EngineClient {
 
     public JsonNode workspaceTree(String workspace, int depth) throws Exception {
         List<String> cmd = new EngineCommandBuilder("workspace-tree", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--workspace", workspace)
                 .arg("--depth", String.valueOf(depth))
                 .build();
@@ -294,6 +323,7 @@ public class EngineClient {
 
     public JsonNode workspaceRead(String workspace, String path) throws Exception {
         List<String> cmd = new EngineCommandBuilder("workspace-read", engineRoot.toString())
+                .globalArg("--db-path", dbPath)
                 .arg("--workspace", workspace)
                 .arg("--path", path)
                 .build();
@@ -305,6 +335,10 @@ public class EngineClient {
         pb.directory(engineRoot.toFile());
         pb.environment().put("PYTHONUTF8", "1");
         pb.environment().put("PYTHONIOENCODING", "utf-8");
+        // 禁用 conda 自动激活并移除可能冲突的环境变量
+        pb.environment().put("CONDA_AUTO_ACTIVATE_BASE", "false");
+        pb.environment().remove("CONDA_SHLVL");
+        pb.environment().remove("CONDA_PROMPT_MODIFIER");
         pb.redirectErrorStream(true);
         Process p = pb.start();
         StringBuilder sb = new StringBuilder();

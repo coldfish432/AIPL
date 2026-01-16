@@ -21,6 +21,9 @@ export interface AppConfig {
     activeSessionKey: string;
     languageKey: string;
     pilotSessionsKey?: string;
+    executionLockKey: string;
+    chatStateKey: string;
+    pendingRequestKey: string;
   };
 }
 
@@ -43,6 +46,9 @@ const defaultConfig: AppConfig = {
     activeSessionKey: "aipl.pilot.active",
     languageKey: "aipl.language",
     pilotSessionsKey: "aipl-pilot-sessions",
+    executionLockKey: "aipl-lock_exec",
+    chatStateKey: "aipl-lock_chat",
+    pendingRequestKey: "aipl-lock_pending",
   },
 };
 
@@ -68,3 +74,5 @@ export const FEATURES = {
   maxSessions: DEFAULT_MAX_SESSIONS,
   maxWorkspaceHistory: DEFAULT_MAX_WORKSPACE_HISTORY,
 };
+
+export const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;

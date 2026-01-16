@@ -73,6 +73,12 @@ def run_codex_with_files(
     if extra_args:
         cmd.extend(extra_args)
 
+    # 清理 Conda 相关环境变量以避免 Windows 中的 0xc0000142 错误
+    clean_env = os.environ.copy()
+    clean_env["CONDA_AUTO_ACTIVATE_BASE"] = "false"
+    for key in ("CONDA_SHLVL", "CONDA_PROMPT_MODIFIER"):
+        clean_env.pop(key, None)
+
     with prompt_path.open("r", encoding="utf-8") as stdin, output_path.open("w", encoding="utf-8") as stdout, error_path.open("w", encoding="utf-8") as stderr:
         result = subprocess.run(
             cmd,
@@ -80,6 +86,7 @@ def run_codex_with_files(
             stdout=stdout,
             stderr=stderr,
             shell=False,
+            env=clean_env,
         )
 
     if result.returncode != 0:

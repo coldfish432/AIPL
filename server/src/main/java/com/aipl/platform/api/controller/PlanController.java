@@ -6,20 +6,24 @@ import com.aipl.platform.api.dto.request.PlanRequest;
 import com.aipl.platform.api.dto.response.ApiResponse;
 import com.aipl.platform.service.AssistantService;
 import com.aipl.platform.service.PlanService;
+import com.aipl.platform.service.RunService;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
 public class PlanController {
     private final PlanService planService;
     private final AssistantService assistantService;
+    private final RunService runService;
 
-    public PlanController(PlanService planService, AssistantService assistantService) {
+    public PlanController(PlanService planService, AssistantService assistantService, RunService runService) {
         this.planService = planService;
         this.assistantService = assistantService;
+        this.runService = runService;
     }
 
     @PostMapping("/plans")
@@ -52,6 +56,32 @@ public class PlanController {
     @GetMapping("/plans/{planId}")
     public ApiResponse<JsonNode> planDetail(@PathVariable String planId) throws Exception {
         return ApiResponse.ok(planService.planDetail(planId));
+    }
+
+    /**
+     * Starts a run for an existing plan.
+     */
+    @PostMapping("/plans/{planId}/run")
+    public ApiResponse<JsonNode> runPlan(
+            @PathVariable String planId,
+            @RequestBody(required = false) Map<String, String> body
+    ) throws Exception {
+        String workspace = body != null ? body.get("workspace") : null;
+        String mode = body != null ? body.get("mode") : null;
+        if (mode == null || mode.isBlank()) {
+            mode = "autopilot";
+        }
+
+        JsonNode res = runService.runPlan(planId, workspace, mode);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
+    }
+
+    @PostMapping("/plans/{planId}/rework")
+    public ApiResponse<JsonNode> reworkPlan(@PathVariable String planId) throws Exception {
+        JsonNode res = runService.reworkPlan(planId);
+        JsonNode data = res.has("data") ? res.get("data") : res;
+        return ApiResponse.ok(data);
     }
 
     @DeleteMapping("/plans/{planId}")

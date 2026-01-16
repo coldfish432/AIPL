@@ -307,36 +307,37 @@ export async function deleteRun(runId: string, planId?: string): Promise<void> {
 // ============================================================
 
 export async function assistantChat(
-  messages: ChatMessage[],
-  workspace?: string
-): Promise<AssistantChatResponse> {
-  const query = buildQueryString({ workspace });
-  return request(`/api/assistant/chat${query}`, {
-    method: "POST",
-    body: JSON.stringify({ messages }),
-  });
-}
+    messages: ChatMessage[],
+    workspace?: string
+  ): Promise<AssistantChatResponse> {
+    return request(`/api/assistant/chat`, {
+      method: "POST",
+      body: JSON.stringify({ messages, workspace }),
+    });
+  }
 
 export async function assistantPlan(
-  messages: ChatMessage[],
-  workspace?: string
-): Promise<{ plan_id?: string; planId?: string; tasks_count?: number; task_chain_text?: string }> {
-  const query = buildQueryString({ workspace });
-  return request(`/api/assistant/plan${query}`, {
-    method: "POST",
-    body: JSON.stringify({ messages }),
-  });
-}
+    messages: ChatMessage[],
+    workspace?: string
+  ): Promise<{ plan_id?: string; planId?: string; tasks_count?: number; task_chain_text?: string }> {
+    return request(`/api/assistant/plan`, {
+      method: "POST",
+      body: JSON.stringify({ messages, workspace }),
+    });
+  }
 
 export async function assistantConfirm(
   planId: string,
   workspace?: string,
   mode?: string
 ): Promise<{ run_id?: string; runId?: string; plan_id?: string; planId?: string; status?: string }> {
-  const query = buildQueryString({ workspace });
-  return request(`/api/assistant/confirm${query}`, {
+  return request(`/api/assistant/confirm`, {
     method: "POST",
-    body: JSON.stringify({ plan_id: planId, mode: mode || "autopilot" }),
+    body: JSON.stringify({
+      planId,
+      workspace,
+      mode: mode || "autopilot",
+    }),
   });
 }
 

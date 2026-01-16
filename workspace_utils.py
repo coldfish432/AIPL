@@ -25,6 +25,11 @@ def normalize_workspace_path(workspace: str | Path | None) -> str:
         return ""
     path_str = str(Path(workspace).resolve())
     if os.name == "nt":
+        normalized_prefixes = ("\\\\?\\", "//?/")
+        for prefix in normalized_prefixes:
+            if path_str.startswith(prefix):
+                path_str = path_str[len(prefix) :]
+                break
         path_str = path_str.lower()
     return path_str.replace("\\", "/").strip()
 

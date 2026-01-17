@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import selectors
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
+from typing import Callable, Generator
 
 from detect_workspace import detect_workspace
 from infra.codex_runner import decode_output, find_codex_bin
@@ -25,6 +28,179 @@ def _extract_last_json(text: str) -> str:
         if line.startswith("{") or line.startswith("["):
             return line
     return text.strip()
+
+
+class CodexStreamResult:
+    """Codex stream execution result."""
+
+    def __init__(self) -> None:
+        self.stdout_content: list[str] = []
+        self.stderr_lines: list[str] = []
+        self.returncode: int | None = None
+        self.error: str | None = None
+
+
+def run_codex_chat_stream(
+    prompt: str,
+    root_dir: Path,
+    workspace: Path | None = None,
+    on_stderr: Callable[[str], None] | None = None,
+    idle_timeout: int = 120,
+    hard_timeout: int = 1800,
+) -> Generator[dict, None, CodexStreamResult]:
+    schema_path = (root_dir / "schemas" / "chat.schema.json").resolve()
+    codex_bin = find_codex_bin()
+    work_dir = str(workspace.resolve()) if workspace else str(root_dir)
+
+    cmd = [
+        str(codex_bin or "codex"),
+        "exec",
+        "--full-auto",
+        "--sandbox",
+        "workspace-write",
+        "-C",
+        work_dir,
+        "--skip-git-repo-check",
+        "--output-schema",
+        str(schema_path),
+        "--color",
+        "never",
+    ]
+
+    result = CodexStreamResult()
+    last_activity = time.time()
+    activity_lock = threading.Lock()
+
+    def update_activity() -> None:
+        nonlocal last_activity
+        with activity_lock:
+            last_activity = time.time()
+
+    def get_idle_seconds() -> float:
+        with activity_lock:
+            return time.time() - last_activity
+
+    yield {"type": "start", "ts": time.time()}
+
+    proc: subprocess.Popen | None = None
+    sel: selectors.BaseSelector | None = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+
+        if proc.stdin:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+
+        sel = selectors.DefaultSelector()
+        sel.register(proc.stdout, selectors.EVENT_READ)
+        sel.register(proc.stderr, selectors.EVENT_READ)
+
+        start_time = time.time()
+        last_heartbeat = start_time
+
+        while True:
+            if proc.poll() is not None:
+                for key, _ in sel.select(timeout=0.1):
+                    try:
+                        remaining = key.fileobj.read()
+                        if remaining:
+                            if key.fileobj is proc.stderr:
+                                for line in remaining.splitlines():
+                                    result.stderr_lines.append(line)
+                                    yield {"type": "stderr", "line": line, "ts": time.time()}
+                            else:
+                                result.stdout_content.append(remaining)
+                    except Exception:
+                        pass
+                break
+
+            elapsed = time.time() - start_time
+            if elapsed > hard_timeout:
+                proc.kill()
+                proc.wait()
+                raise RuntimeError(f"Codex total timeout ({hard_timeout}s)")
+
+            idle = get_idle_seconds()
+            if idle > idle_timeout:
+                proc.kill()
+                proc.wait()
+                raise RuntimeError(f"Codex idle timeout ({idle_timeout}s)")
+
+            now = time.time()
+            if now - last_heartbeat > 5:
+                yield {"type": "heartbeat", "ts": now, "idle": idle}
+                last_heartbeat = now
+
+            events = sel.select(timeout=1)
+            for key, _ in events:
+                line = key.fileobj.readline()
+                if not line:
+                    continue
+
+                update_activity()
+                if key.fileobj is proc.stderr:
+                    line = line.rstrip()
+                    result.stderr_lines.append(line)
+                    if on_stderr:
+                        try:
+                            on_stderr(line)
+                        except Exception:
+                            pass
+                    yield {"type": "stderr", "line": line, "ts": time.time()}
+                else:
+                    result.stdout_content.append(line)
+    except Exception as e:
+        result.error = str(e)
+        yield {"type": "error", "message": str(e), "ts": time.time()}
+    finally:
+        if sel:
+            try:
+                sel.close()
+            except Exception:
+                pass
+        if proc and proc.poll() is None:
+            proc.wait()
+        result.returncode = proc.returncode if proc else None
+
+    yield {"type": "done", "result": result}
+
+
+def run_codex_chat_with_callback(
+    prompt: str,
+    root_dir: Path,
+    workspace: Path | None = None,
+    on_stderr: Callable[[str], None] | None = None,
+    idle_timeout: int = 120,
+    hard_timeout: int = 1800,
+) -> str:
+    result: CodexStreamResult | None = None
+    for event in run_codex_chat_stream(
+        prompt,
+        root_dir,
+        workspace,
+        on_stderr=on_stderr,
+        idle_timeout=idle_timeout,
+        hard_timeout=hard_timeout,
+    ):
+        if event["type"] == "done":
+            result = event["result"]
+    if result is None:
+        raise RuntimeError("Codex execution failed")
+    if result.error:
+        raise RuntimeError(result.error)
+    if result.returncode not in (0, None):
+        err = "\n".join(result.stderr_lines) if result.stderr_lines else ""
+        raise RuntimeError((err or "".join(result.stdout_content)).strip())
+    return "".join(result.stdout_content).strip()
 
 
 def _format_conversation(messages: list[dict]) -> str:

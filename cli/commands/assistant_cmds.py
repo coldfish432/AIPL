@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+import time
 from pathlib import Path
 
 from cli.utils import (
@@ -11,6 +13,7 @@ from cli.utils import (
     _resolve_workspace_target,
     envelope,
     run_codex_chat,
+    run_codex_chat_stream,
 )
 from infra.io_utils import read_json
 
@@ -103,3 +106,131 @@ def cmd_assistant_chat(args, root: Path):
 
     res = envelope(True, data=data)
     print(json.dumps(res, ensure_ascii=False))
+
+
+def cmd_assistant_chat_stream(args, root: Path):
+    if not args.messages_file:
+        print(json.dumps({"type": "error", "message": "messages_file is required"}, ensure_ascii=False))
+        sys.stdout.flush()
+        return
+
+    messages_path = Path(args.messages_file)
+    if not messages_path.exists():
+        print(json.dumps({"type": "error", "message": "messages_file not found"}, ensure_ascii=False))
+        sys.stdout.flush()
+        return
+
+    payload = read_json(messages_path, default={})
+    messages = payload.get("messages", []) if isinstance(payload, dict) else []
+    if not isinstance(messages, list):
+        messages = []
+
+    workspace_path = None
+    if hasattr(args, "workspace") and args.workspace:
+        workspace_path = Path(args.workspace)
+
+    resolved_workspace = _resolve_workspace_target(root, workspace_path)
+    workspace_context = _build_workspace_context(root, workspace_path, resolved_workspace=resolved_workspace)
+    conversation = _format_conversation(messages)
+    tmpl_path = root / "prompts" / "chat.txt"
+    tmpl = tmpl_path.read_text(encoding="utf-8")
+    prompt = tmpl.format(
+        workspace_context=workspace_context,
+        conversation=conversation,
+    )
+
+    result_data = None
+    try:
+        for event in run_codex_chat_stream(
+            prompt.strip(),
+            root,
+            resolved_workspace,
+            idle_timeout=300,     # 5分钟无输出才判定为idle（原120秒）
+            hard_timeout=1800,    # 总超时30分钟（原10分钟）
+        ):
+            event_type = event.get("type")
+
+            if event_type == "start":
+                print(json.dumps({"type": "start", "ts": event.get("ts")}, ensure_ascii=False))
+                sys.stdout.flush()
+
+            elif event_type == "stderr":
+                line = event.get("line", "")
+                if line and line.strip():
+                    print(json.dumps({
+                        "type": "stderr",
+                        "line": line[:500],
+                        "ts": event.get("ts"),
+                    }, ensure_ascii=False))
+                    sys.stdout.flush()
+
+            elif event_type == "heartbeat":
+                print(json.dumps({
+                    "type": "heartbeat",
+                    "ts": event.get("ts"),
+                    "idle": event.get("idle", 0),
+                }, ensure_ascii=False))
+                sys.stdout.flush()
+
+            elif event_type == "error":
+                print(json.dumps({
+                    "type": "error",
+                    "message": event.get("message", "unknown error"),
+                    "ts": event.get("ts"),
+                }, ensure_ascii=False))
+                sys.stdout.flush()
+
+            elif event_type == "done":
+                result = event.get("result")
+                if result:
+                    result_data = result
+    except Exception as exc:
+        print(json.dumps({
+            "type": "error",
+            "message": str(exc),
+            "ts": time.time(),
+        }, ensure_ascii=False))
+        sys.stdout.flush()
+        return
+
+    if result_data is None:
+        print(json.dumps({
+            "type": "error",
+            "message": "no result from codex",
+            "ts": time.time(),
+        }, ensure_ascii=False))
+        sys.stdout.flush()
+        return
+
+    if result_data.error:
+        print(json.dumps({
+            "type": "error",
+            "message": result_data.error,
+            "ts": time.time(),
+        }, ensure_ascii=False))
+        sys.stdout.flush()
+        return
+
+    raw_reply = "".join(result_data.stdout_content).strip()
+    reply = ""
+    try:
+        reply_obj = json.loads(_extract_last_json(raw_reply))
+        reply = reply_obj.get("reply", "")
+    except Exception:
+        reply = raw_reply
+
+    parsed = _parse_intent_markers(reply)
+    data = {
+        "reply": parsed["clean_reply"],
+        "intent": parsed["intent"],
+        "task_summary": parsed["task_summary"],
+        "task_files": parsed["task_files"],
+        "task_operations": parsed["task_operations"],
+    }
+
+    print(json.dumps({
+        "type": "reply",
+        "data": data,
+        "ts": time.time(),
+    }, ensure_ascii=False))
+    sys.stdout.flush()

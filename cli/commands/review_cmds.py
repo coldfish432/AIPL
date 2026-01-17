@@ -233,6 +233,15 @@ def cmd_rework(args, root: Path):
     }
     write_json(round_dir / "rework_request.json", payload)
     append_jsonl(run_dir / "events.jsonl", {"type": "rework_start", "run_id": meta.get("run_id"), "step": step_id, "round": next_round, "ts": time.time()})
+
+    cancel_flag = run_dir / "cancel.flag"
+    if cancel_flag.exists():
+        cancel_flag.unlink()
+
+    # ensure the run transitions to running before the child process starts
+    meta.update({"status": "running", "updated_at": time.time()})
+    write_json(run_dir / "meta.json", meta)
+    update_run_status(root, run_dir.name, "running")
     cmd = ["python", "scripts/subagent_shim.py", "--root", str(root), str(run_dir), task_id, step_id, str(next_round), "good", "--workspace", stage_root, "--workspace-main", main_root]
     subprocess.check_call(cmd, cwd=root)
     passed, reasons = VerifierService(root).verify_task(run_dir, task_id, workspace_path=Path(stage_root))

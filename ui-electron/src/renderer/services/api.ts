@@ -46,6 +46,15 @@ export type AssistantChatResponse = {
   taskOperations?: string[];
 };
 
+export interface AssistantStreamEvent {
+  type: "start" | "stderr" | "heartbeat" | "reply" | "error" | "log" | string;
+  ts?: number;
+  line?: string;
+  message?: string;
+  data?: AssistantChatResponse;
+  idle?: number;
+}
+
 export type PlanSummary = {
   id?: string;
   plan_id?: string;
@@ -135,7 +144,9 @@ export type RunEvent = {
   level?: string;
   progress?: number;
   step_id?: string;
+  step?: string;
   round?: number | string;
+  task_id?: string;
 };
 
 export type RunEventsResponse = {
@@ -315,6 +326,81 @@ export async function assistantChat(
       body: JSON.stringify({ messages, workspace }),
     });
   }
+
+export async function assistantChatStream(
+  messages: ChatMessage[],
+  workspace: string | undefined,
+  onEvent: (event: AssistantStreamEvent) => void
+): Promise<AssistantChatResponse | null> {
+  const res = await fetch(`${BASE_URL}/api/assistant/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({ messages, workspace }),
+  });
+  if (!res.ok) {
+    throw new AiplError(`Assistant stream failed: ${res.statusText || res.status}`, "STREAM_ERROR");
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new AiplError("Stream not supported by this browser", "STREAM_ERROR");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalData: AssistantChatResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) {
+        continue;
+      }
+      const payload = trimmed.slice(5).trim();
+      if (!payload) {
+        continue;
+      }
+
+      let event: AssistantStreamEvent;
+      try {
+        event = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+
+      if (event.type === "reply" && event.data) {
+        finalData = event.data;
+      }
+      onEvent(event);
+    }
+  }
+
+  if (buffer.trim().startsWith("data:")) {
+    const payload = buffer.trim().slice(5).trim();
+    if (payload) {
+      try {
+        const event: AssistantStreamEvent = JSON.parse(payload);
+        if (event.type === "reply" && event.data) {
+          finalData = event.data;
+        }
+        onEvent(event);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return finalData;
+}
 
 export async function assistantPlan(
     messages: ChatMessage[],

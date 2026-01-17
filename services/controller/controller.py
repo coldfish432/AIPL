@@ -127,6 +127,7 @@ class TaskController:
 
         plan_id = task.get("plan_id")
         plan_id_for_run = plan_id or time.strftime("plan-%Y%m%d-%H%M%S")
+        task_title = task.get("title", "")
 
         run_id = time.strftime("run-%Y%m%d-%H%M%S")
 
@@ -204,6 +205,15 @@ class TaskController:
                     "ts": time.time(),
                 },
             )
+
+        mirror_run(
+            root,
+            run_id,
+            plan_id_for_run,
+            workspace=workspace_path or "",
+            status="running",
+            task=task_title or "",
+        )
 
         passed_all = True
         final_reasons = []

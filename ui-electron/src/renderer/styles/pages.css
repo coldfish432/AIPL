@@ -982,6 +982,138 @@
   text-decoration: underline;
 }
 
+/* Failure reason box */
+.run-detail-failure {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--color-error-bg, rgba(239, 68, 68, 0.1));
+  border: 1px solid var(--color-error, #ef4444);
+  border-radius: var(--radius-md, 8px);
+}
+
+.run-detail-failure-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  color: var(--color-error, #ef4444);
+  font-weight: 600;
+}
+
+.run-detail-failure-header .failure-icon {
+  flex-shrink: 0;
+}
+
+.run-detail-failure-reason {
+  padding: 0.75rem;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: var(--radius-sm, 4px);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.875rem;
+  color: var(--text-primary, #1f2937);
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.run-detail-failure-description {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: var(--radius-sm, 4px);
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #6b7280);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.run-detail-failure-details {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.run-detail-failure-details > strong {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--color-error, #ef4444);
+}
+
+.run-detail-failure-details ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  list-style-type: disc;
+}
+
+.run-detail-failure-details li {
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary, #6b7280);
+  line-height: 1.5;
+}
+
+.run-detail-failure-details li:last-child {
+  margin-bottom: 0;
+}
+
+.run-detail-failure-details .failure-type {
+  display: inline-block;
+  padding: 0.125rem 0.375rem;
+  margin-right: 0.5rem;
+  background: var(--color-error, #ef4444);
+  color: white;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.run-detail-failure-details .failure-path {
+  display: block;
+  margin-top: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--bg-tertiary, #f3f4f6);
+  border-radius: var(--radius-sm, 4px);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--text-tertiary, #9ca3af);
+}
+
+@media (prefers-color-scheme: dark) {
+  .run-detail-failure {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: #f87171;
+  }
+
+  .run-detail-failure-header {
+    color: #f87171;
+  }
+
+  .run-detail-failure-reason {
+    background: rgba(255, 255, 255, 0.1);
+    color: #f3f4f6;
+  }
+
+  .run-detail-failure-description {
+    background: rgba(255, 255, 255, 0.05);
+    color: #d1d5db;
+  }
+
+  .run-detail-failure-details > strong {
+    color: #f87171;
+  }
+
+  .run-detail-failure-details li {
+    color: #d1d5db;
+  }
+
+  .run-detail-failure-details .failure-type {
+    background: #f87171;
+  }
+
+  .run-detail-failure-details .failure-path {
+    background: rgba(255, 255, 255, 0.1);
+    color: #9ca3af;
+  }
+}
+
 /* Actions */
 .run-detail-actions {
   display: flex;

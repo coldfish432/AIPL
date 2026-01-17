@@ -53,31 +53,31 @@ Why failed:
 - Mention which related/missing files you evaluated in your analysis.
 
 Return a JSON object with this schema:
-{
-  "analysis": {
+{{
+  "analysis": {{
     "understood_problem": "<brief>",
     "planned_fix": "<brief>",
     "related_files_considered": ["<path>"],
     "missing_files_addressed": ["<path>"]
-  },
+  }},
   "writes": [
-    {
+    {{
       "target": "workspace",
       "path": "<relative-to-workspace>",
       "content": "<full file content>",
       "reason": "<reason for the change>"
-    }
+    }}
   ],
   "commands": [
-    {
+    {{
       "cmd": "python -m pytest",
       "timeout": 300,
       "purpose": "<why this command>"
-    }
+    }}
   ],
-  "expectations": {
+  "expectations": {{
     "likely_to_succeed": true,
     "potential_issues": ["<optional>"],
     "fallback_plan": "<optional>"
-  }
-}
+  }}
+}}

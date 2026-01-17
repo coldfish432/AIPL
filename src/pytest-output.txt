@@ -1,2 +1,2 @@
-collected 8 items
-8 passed, in 0.14s
+collected 82 items
+82 passed, in 37.42s

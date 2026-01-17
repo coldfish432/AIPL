@@ -34,9 +34,10 @@ import TaskBriefing from "@/components/TaskBriefing";
 import type { ExecutionContext as LockExecutionContext } from "@/types/lock";
 import { useI18n } from "@/hooks/useI18n";
 import {
-  assistantChat,
+  assistantChatStream,
   assistantPlan,
   assistantConfirm,
+  AssistantStreamEvent,
   ChatMessage,
 } from "@/services/api";
 import { STORAGE_KEYS } from "@/config/settings";
@@ -176,6 +177,8 @@ export default function Pilot() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [codexThinking, setCodexThinking] = useState<string[]>([]);
+  const [isCodexThinking, setIsCodexThinking] = useState(false);
 
   // UI 状态
   const [input, setInput] = useState("");
@@ -194,6 +197,7 @@ export default function Pilot() {
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const thinkingEndRef = useRef<HTMLDivElement>(null);
 
   // 滚动到底部
   const scrollToBottom = useCallback(() => {
@@ -203,6 +207,10 @@ export default function Pilot() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  useEffect(() => {
+    thinkingEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [codexThinking]);
 
   // 加载会话
   useEffect(() => {
@@ -306,6 +314,8 @@ export default function Pilot() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setLoading(true);
+    setCodexThinking([]);
+    setIsCodexThinking(true);
     setError(null);
 
     const requestId = startChatRequest();
@@ -318,14 +328,33 @@ export default function Pilot() {
 
       const chatMessages = buildMessagesWithContext(baseMessages, executionContext);
 
-      const response = (await assistantChat(chatMessages, workspace)) as {
-        reply?: string;
-        message?: string;
-        intent?: string;
-        task_summary?: string;
-        task_files?: string[];
-        task_operations?: string[];
-      };
+      const response = await assistantChatStream(
+        chatMessages,
+        workspace,
+        (event: AssistantStreamEvent) => {
+          switch (event.type) {
+            case "start":
+              setCodexThinking(["Codex 开始处理中..."]);
+              break;
+            case "stderr":
+              if (event.line) {
+                setCodexThinking((prev) => [...prev.slice(-19), event.line!]);
+              }
+              break;
+            case "error":
+              if (event.message) {
+                setCodexThinking((prev) => [...prev, `错误: ${event.message}`]);
+              }
+              break;
+            default:
+              break;
+          }
+        }
+      );
+
+      if (!response) {
+        throw new Error("Codex 未返回结果");
+      }
 
       const reply = response.reply || response.message || "";
       const intent = response.intent as "task" | "question" | undefined;
@@ -376,6 +405,7 @@ export default function Pilot() {
       setError(errorMessage);
     } finally {
       setLoading(false);
+      setIsCodexThinking(false);
     }
   }, [
     input,
@@ -665,6 +695,23 @@ export default function Pilot() {
           )}
           <div ref={messagesEndRef} />
         </div>
+
+        {isCodexThinking && codexThinking.length > 0 && (
+          <div className="pilot-thinking-panel">
+            <div className="pilot-thinking-header">
+              <Loader2 size={16} className="spin" />
+              <span>Codex 思考中...</span>
+            </div>
+            <div className="pilot-thinking-content">
+              {codexThinking.map((line, idx) => (
+                <div key={idx} className="pilot-thinking-line">
+                  {line}
+                </div>
+              ))}
+              <div ref={thinkingEndRef} />
+            </div>
+          </div>
+        )}
 
         {/* 任务检测卡片 */}
         {mode === "task_detected" && (

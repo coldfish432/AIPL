@@ -53,6 +53,11 @@ def create_parser() -> argparse.ArgumentParser:
     p_chat.add_argument("--workspace", help="workspace path (Codex will run here)")
     p_chat.set_defaults(func=assistant_cmds.cmd_assistant_chat)
 
+    p_chat_stream = sub.add_parser("assistant-chat-stream")
+    p_chat_stream.add_argument("--messages-file", required=True)
+    p_chat_stream.add_argument("--workspace", help="workspace path (Codex will run here)")
+    p_chat_stream.set_defaults(func=assistant_cmds.cmd_assistant_chat_stream)
+
     p_tree = sub.add_parser("workspace-tree")
     p_tree.add_argument("--workspace", required=True)
     p_tree.add_argument("--depth", type=int, default=3)

@@ -55,10 +55,11 @@ interface EventItem {
   message: string;
   level: "info" | "success" | "warning" | "error";
   detail?: string;
+  isHeartbeat?: boolean;
 }
 
 /**
- * 标准化时间戳 —— 自动识别秒级时间并转换为毫秒
+ * 标准化时间戳 - 自动识别秒级时间并转换为毫秒
  */
 function normalizeTimestamp(ts: unknown): number {
   if (typeof ts === "number") {
@@ -96,6 +97,19 @@ function processEvent(event: RunEvent): EventItem {
   let message = event.message || event.detail || type;
   let level: EventItem["level"] = "info";
 
+  // 过滤心跳事件（仅有 ts 没有 type 的事件）
+  if (!normalizedType || normalizedType === "unknown" || normalizedType === "heartbeat") {
+    return {
+      id: `heartbeat-${event.ts || Date.now()}`,
+      timestamp: normalizeTimestamp(event.ts),
+      type: "heartbeat",
+      prefix: "",
+      message: "",
+      level: "info",
+      isHeartbeat: true,
+    };
+  }
+
   switch (normalizedType) {
     // 初始化
     case "run_init":
@@ -113,17 +127,64 @@ function processEvent(event: RunEvent): EventItem {
       level = "success";
       break;
 
-    // Codex 相关
-    case "codex_start":
+    // 子代理启动（区分于 codex_start）
     case "subagent_start":
+      prefix = "子代理";
+      message = `启动子代理 (步骤 ${event.step || "?"}, 轮次 ${event.round || "?"})`;
+      level = "info";
+      break;
+    case "subagent_done":
+      prefix = "子代理";
+      message = "子代理处理完成";
+      level = "success";
+      break;
+    case "subagent_failed":
+      prefix = "子代理";
+      message = event.message || "子代理处理失败";
+      level = "error";
+      break;
+
+    // 准备阶段事件
+    case "prepare_snapshot":
+      prefix = "准备";
+      message = "正在收集输出快照...";
+      level = "info";
+      break;
+    case "prepare_graph":
+      prefix = "准备";
+      message = "正在分析代码依赖关系...";
+      level = "info";
+      break;
+    case "prepare_prompt":
+      prefix = "准备";
+      message = "正在构建 Codex 提示词...";
+      level = "info";
+      break;
+    case "prepare_codex":
+      prefix = "准备";
+      message = "准备调用 Codex CLI...";
+      level = "info";
+      break;
+    case "apply_changes":
+      prefix = "变更";
+      message = "正在应用代码变更...";
+      level = "info";
+      break;
+    case "run_commands":
+      prefix = "命令";
+      message = "正在执行验证命令...";
+      level = "info";
+      break;
+
+    // Codex CLI 相关
+    case "codex_start":
       prefix = "CODEX";
-      message = event.task_title || "调用 Codex 处理任务...";
+      message = "Codex CLI 开始执行...";
       level = "info";
       break;
     case "codex_done":
-    case "subagent_done":
       prefix = "CODEX";
-      message = event.task_title ? `${event.task_title} 完成` : "Codex 处理完成";
+      message = "Codex CLI 执行完成";
       level = "success";
       break;
     case "codex_timeout":
@@ -131,10 +192,19 @@ function processEvent(event: RunEvent): EventItem {
       message = "Codex 响应超时";
       level = "warning";
       break;
-    case "codex_failed":
-    case "subagent_failed":
+    case "codex_output":
       prefix = "CODEX";
-      message = event.message || "Codex 处理失败";
+      message = event.message || "Codex 输出";
+      level = "info";
+      break;
+    case "codex_stale":
+      prefix = "CODEX";
+      message = event.detail || "Codex 无响应";
+      level = "error";
+      break;
+    case "codex_failed":
+      prefix = "CODEX";
+      message = event.message || "Codex CLI 执行失败";
       level = "error";
       break;
 
@@ -264,8 +334,9 @@ function processEvent(event: RunEvent): EventItem {
 
   // 生成稳定的事件 ID（避免依赖外部索引）
   const stableId =
-    event.event_id ||
-    `${normalizedType}-${event.ts || ""}-${event.step_id || event.step || ""}-${event.round ?? ""}-${event.task_id || ""}`;
+    event.event_id != null
+      ? String(event.event_id)
+      : `${normalizedType}-${event.ts ?? ""}-${event.step_id || event.step || ""}-${event.round ?? ""}-${event.task_id || ""}`;
 
   return {
     id: stableId,
@@ -282,30 +353,26 @@ function getStatusInfo(status: string): { text: string; icon: React.ElementType;
   const normalized = status?.toLowerCase().replace(/-/g, "_") || "unknown";
   
   switch (normalized) {
-    case "completed":
-    case "done":
-    case "applied":
-      return { text: "已完成", icon: CheckCircle, className: "status-completed" };
-    case "failed":
-    case "error":
-      return { text: "失败", icon: XCircle, className: "status-failed" };
     case "running":
     case "executing":
     case "doing":
       return { text: "执行中", icon: Activity, className: "status-running" };
     case "queued":
-    case "todo":
+    case "pending":
     case "starting":
       return { text: "排队中", icon: Clock, className: "status-queued" };
     case "awaiting_review":
-    case "awaitingreview":
       return { text: "待审核", icon: AlertTriangle, className: "status-review" };
+    case "completed":
+    case "done":
+    case "applied":
+      return { text: "已完成", icon: CheckCircle, className: "status-completed" };
+    case "failed":
+      return { text: "失败", icon: XCircle, className: "status-failed" };
     case "canceled":
-    case "cancelled":
     case "terminated":
-      return { text: "已终止", icon: Square, className: "status-canceled" };
     case "discarded":
-      return { text: "已丢弃", icon: XCircle, className: "status-discarded" };
+      return { text: "已取消", icon: XCircle, className: "status-canceled" };
     default:
       return { text: status || "未知", icon: Clock, className: "status-unknown" };
   }
@@ -321,29 +388,26 @@ export default function RunDetail() {
   const planId = searchParams.get("planId") || undefined;
   const navigate = useNavigate();
   
-  const { t } = useI18n();
-  const { workspace } = useWorkspace();
-  const { execution, markCompleted, markAwaitingReview } = useExecution();
-
+  const { markAwaitingReview, markCompleted } = useExecution();
+  
   const [runData, setRunData] = useState<RunDetailResponse | null>(null);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
-
-  const eventsEndRef = useRef<HTMLDivElement>(null);
+  
   const eventSourceRef = useRef<EventSource | null>(null);
+  const eventsEndRef = useRef<HTMLDivElement>(null);
   const seenEventIds = useRef<Set<string>>(new Set());
 
-  // 加载 Run 数据
+  // 加载运行状态
   const loadRun = useCallback(async () => {
     if (!runId) return;
-
+    
     try {
       const data = await getRun(runId, planId);
       setRunData(data);
-
-      // 检查状态变化
+      
       const status = data?.run?.status || data?.status || "";
       const normalized = status.toLowerCase().replace(/-/g, "_");
       
@@ -367,6 +431,7 @@ export default function RunDetail() {
       const processed = rawEvents
         .map((e) => processEvent(e))
         .filter((e) => {
+          if (e.isHeartbeat) return false;
           if (seenEventIds.current.has(e.id)) return false;
           seenEventIds.current.add(e.id);
           return true;
@@ -411,6 +476,9 @@ export default function RunDetail() {
         try {
           const event: RunEvent = JSON.parse(e.data);
           const processed = processEvent(event);
+          
+          // 过滤心跳事件
+          if (processed.isHeartbeat) return;
           
           if (!seenEventIds.current.has(processed.id)) {
             seenEventIds.current.add(processed.id);
@@ -500,12 +568,15 @@ export default function RunDetail() {
   // 解析数据
   const run = runData?.run || runData;
   const status = run?.status || run?.state || "unknown";
+  const normalizedStatus = status.toLowerCase().replace(/-/g, "_");
   const statusInfo = getStatusInfo(status);
   const StatusIcon = statusInfo.icon;
   const task = run?.task || run?.input_task || "";
-  const isRunning = ["running", "executing", "doing"].includes(status.toLowerCase().replace(/-/g, "_"));
-  const isAwaitingReview = status.toLowerCase().replace(/-/g, "_") === "awaiting_review";
-  const isFinished = ["completed", "done", "applied", "failed", "canceled", "discarded", "terminated"].includes(status.toLowerCase().replace(/-/g, "_"));
+  const isRunning = ["running", "executing", "doing"].includes(normalizedStatus);
+  const isAwaitingReview = normalizedStatus === "awaiting_review";
+  const isFinished = ["completed", "done", "applied", "failed", "canceled", "discarded", "terminated"].includes(
+    normalizedStatus,
+  );
 
   if (loading) {
     return (
@@ -571,8 +642,40 @@ export default function RunDetail() {
         )}
       </div>
 
-      {/* 操作按钮 */}
-      {(isRunning || isAwaitingReview) && (
+    {/* 失败原因 */}
+    {normalizedStatus === "failed" && run?.failure_reason && (
+      <div className="run-detail-failure">
+        <div className="run-detail-failure-header">
+          <XCircle size={16} className="failure-icon" />
+          <strong>失败原因</strong>
+        </div>
+        <div className="run-detail-failure-reason">
+          {run.failure_reason}
+        </div>
+        {run.failure_reason_detail && (
+          <div className="run-detail-failure-description">
+            {run.failure_reason_detail}
+          </div>
+        )}
+        {run.failure_details && run.failure_details.length > 0 && (
+          <div className="run-detail-failure-details">
+            <strong>详细信息</strong>
+            <ul>
+              {run.failure_details.map((detail, idx) => (
+                <li key={idx}>
+                  {detail.type && <span className="failure-type">[{detail.type}]</span>}
+                  {detail.reason || detail.detail || "未知错误"}
+                  {detail.path && <code className="failure-path">{detail.path}</code>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* 操作按钮 */}
+    {(isRunning || isAwaitingReview) && (
         <div className="run-detail-actions">
           {isAwaitingReview && (
             <>
@@ -620,7 +723,7 @@ export default function RunDetail() {
               {isRunning ? "等待事件..." : "暂无执行记录"}
             </div>
           ) : (
-            events.map((event) => {
+            events.filter((e) => !e.isHeartbeat).map((event) => {
               const EventIcon = {
                 info: MessageSquare,
                 success: CheckCircle,
